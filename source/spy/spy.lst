@@ -1,0 +1,132 @@
+Motorola DSP56000 Assembler  Version 3.1  96-03-22  20:26:42  spy.asm  Page 1
+
+
+
+1                        ;******************************************************
+*********
+2                        ;* SPY.ASM -- Simple oscilloscope with SPY             
+       *
+3                        ;*                                                     
+  *
+4                        ;* Displays Left and Right channels on the SPY program.
+        *
+5                        ;*                                                     
+  *
+6                        ;* Copyright (C) 1994-1996 by Alef Null. All rights res
+erved.  *
+7                        ;* Author(s): Jarkko Vuori, OH2LNS                     
+      *
+8                        ;* Modification(s):                                    
+    *
+9                        ;******************************************************
+*********
+10     
+337    
+338       000010         buflen    equ     16                                ; l
+enght of sample buffer
+339    
+340    
+341       P:0040                   org     p:
+342    
+343       P:0040 67F400            move              #buffer+2,r7
+                 000042
+344       P:0042 053FA7            move              #buflen*4-1,m7
+345    
+346       P:0043 62F400            move              #buffer,r2
+                 000040
+347       P:0045 3A0300            move              #4-1,n2
+348       P:0046 053FA2            move              #buflen*4-1,m2
+349    
+350                                ctrlcd  1,r2,buflen,LINEI,0.0,0.0,LINEO|HEADP
+,0.0,0.0
+371                                opencd  32,NOHPF
+401    
+402                      ; wait for one complete block
+403                      loop      waitblk r2,buflen,1
+423    
+424                      ; copy left and right channels to the left and right ou
+tputs
+425       P:0063 56DA00            move              x:(r2)+,a               ; l
+eft channel  -> a
+426       P:0064 57E200            move              x:(r2),b                ; r
+ight channel -> b
+427       P:0065 5E5A00            move                          a,y:(r2)+
+428       P:0066 5F5A00            move                          b,y:(r2)+
+429       P:0067 205A00            move              (r2)+
+430    
+431                      ; and to the spy
+432                                spy
+434    
+435                      ; loop again (yeah, boring but that's the reason comput
+ers are built)
+436       P:0069 0C0055            jmp     <loop
+437    
+438    
+439                                spyhere CplxSpy                           ; h
+ere is the SPY code
+Motorola DSP56000 Assembler  Version 3.1  96-03-22  20:26:42  spy.asm  Page 2
+
+
+
+528    
+529    
+530       X:0019                   org     x:
+531    
+532       X:0040         buffer    dsm     buflen*4
+533    
+534    
+535       Y:0018                   org     y:
+536    
+537       Y:0040                   dsm     buflen*4
+538    
+539                                end
+
+0    Errors
+0    Warnings
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

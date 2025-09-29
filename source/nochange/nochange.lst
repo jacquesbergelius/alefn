@@ -1,0 +1,132 @@
+Motorola DSP56000 Assembler  Version 3.1  95-04-10  19:53:48  nochange.asm
+  Page 1
+
+
+
+1                        ;******************************************************
+*********
+2                        ;* NOCHANGE.ASM -- Pass input to output without change 
+        *
+3                        ;*                                                     
+  *
+4                        ;* Provides extremely narrow FIR bandpass filter.      
+        *
+5                        ;*                                                     
+  *
+6                        ;* Copyright (C) 1993 by Alef Null. All rights reserved
+.       *
+7                        ;* Author(s): Jarkko Vuori, OH2LNS                     
+      *
+8                        ;* Modification(s):                                    
+    *
+9                        ;******************************************************
+*********
+10     
+11     
+242    
+243    
+244       000010         buflen    equ     16                                ; l
+enght of sample buffer
+245       000000         stereo    equ     0                                 ; m
+ono/stereo selector
+246    
+247    
+248       P:0040                   org     p:user_code
+249    
+250       P:0040 67F400            move              #buffer+2,r7
+                 000042
+251       P:0042 053FA7            move              #buflen*4-1,m7
+252    
+253       P:0043 62F400            move              #buffer,r2
+                 000040
+254       P:0045 3A0300            move              #4-1,n2
+255       P:0046 053FA2            move              #buflen*4-1,m2
+256    
+257                                ctrlcd  1,r2,buflen,LINEI,0.0,0.0,LINEO|HEADP
+,0.0,0.0
+278                                opencd  16,NOHPF
+307    
+308                      ; wait for one complete block
+309                      loop      waitblk r2,buflen,1
+329    
+330                      ; *** stereo mode
+331                                if      stereo
+344                                else
+345       P:0063 56DA00            move              x:(r2)+,a
+346       P:0064 5E5A00            move                          a,y:(r2)+
+347       P:0065 5E5A00            move                          a,y:(r2)+
+348       P:0066 205A00            move              (r2)+
+349    
+350                                endif
+351    
+352       P:0067 0C0055            jmp     <loop
+353    
+354    
+355       X:0018                   org     x:user_data
+356    
+Motorola DSP56000 Assembler  Version 3.1  95-04-10  19:53:48  nochange.asm
+  Page 2
+
+
+
+357       X:0040         buffer    dsm     buflen*4
+358    
+359    
+360       Y:0018                   org     y:user_data
+361    
+362       Y:0040                   dsm     buflen*4
+363    
+364    
+365                                end
+
+0    Errors
+0    Warnings
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,2212 @@
+Motorola DSP56000 Assembler  Version 3.1  96-06-20  17:37:22  boot.asm  Page 1
+
+
+
+1                                  page    132,79
+2                                  opt     rc
+4      
+5                        ;****************************************************************************
+6                        ;* Copyright (C) 1992-1996 by Alef Null. All rights reserved.              *
+7                        ;* Author(s): Jarkko Vuori, OH2LNS                                      *
+8                        ;*            Johan Forrer, KC7WW                                      *
+9                        ;****************************************************************************
+10                       ;* Here are all DSP56001/2 interrupt vectors and space for                  *
+11                       ;* interrupt contexts and basic interrupt service routines.                *
+12                       ;* Also included are initalization code, self checking and                 *
+13                       ;* support routines for host communication, codec control,                 *
+14                       ;* low level AX25 handling and transmit control.                                  *
+15                       ;*                                                                          *
+16                       ;* KISS protocol handling is based on article                                    *
+17                       ;*      Chepponis, M., Karn, P.:                                               *
+18                       ;*      "The KISS TNC: A simple Host-to-TNC communications                        *
+19                       ;*       protocol",                                                               *
+20                       ;*      Proc. of the sixth ARRL computer networking cnf., 1988                    *
+21                       ;*                                                                          *
+22                       ;* HDLC protocol handling is based on article                                    *
+23                       ;*      Carlson, D., E.:                                                      *
+24                       ;*      "Bit-Oriented Data Link Control Procedures",                             *
+25                       ;*      IEEE Trans. on Comm., Vol. 28, No. 4, April 1980                          *
+26                       ;*                                                                          *
+27                       ;* CRC calculation/checking is based on article                                   *
+28                       ;*      Morse, G.:                                                           *
+29                       ;*      "Calculating CRCs by bits and bytes",                                   *
+30                       ;*      BYTE Vol. 11, No. 9, September 1986                                     *
+31                       ;*                                                                          *
+32                       ;* Modification(s):                                                           *
+33                       ;*                                                                          *
+34                       ;*      08.04.95    added version number printout after reset  (JV)       *
+35                       ;*      03.08.95    added DWAIT control logic to the KISS      (JV)       *
+36                       ;*                 transmit control                                     *
+37                       ;*      02.09.95    corrected and modified KISS parameter      (JV)       *
+38                       ;*                 handling and TXDELAY=0,TXTAIL=0 bugs                    *
+39                       ;*                 KISS buffer length increased to 2048 bytes            *
+40                       ;*      27.12.95    Conditional assembly for either EVM or DSP4 (JF)       *
+41                       ;*      22.03.96    Corrected occasional hang-out in opencd    (JF,JV)     *
+42                       ;*      11.06.96    Corrected occasional hang-out in reset     (JV)       *
+43                       ;*                                                                  *
+44                       ;*                                                                  *
+45                       ;* NOTE: r7 is sacred!! - it is used by the SSI - DO NOT TOUCH!             *
+46                       ;*       r3 as well    - it is used by SCI                             *
+47                       ;*                                                                  *
+48                       ;* EVM CODEC SETUP DIFFERENCES (cryconf):                                *
+49                       ;*       1) EVM uses the wrong crystal selection for the 24MHz xtal        *
+50                       ;*          (check control word 1/2).                                  *
+51                       ;*       2) It appears that we need to use the MIC input - I also          *
+52                       ;*          disable the input pre-amp, (check control word 3/4).           *
+53                       ;****************************************************************************
+54     
+55                       ; Version number (source code date)
+56        0007CC         year      equ     1996
+57        000006         month     equ     6
+58        00000B         day       equ     11
+59     
+60                       ; Platform selector (DSPCARD4 (0), EVM56002 (1))
+61        000000         EVM56K    equ     0
+62     
+63                                 if      EVM56K
+132                                else
+133                      ;-----------------------------------------------------------------------------
+134                      ;****************************
+135                      ;* DSP4 specific parameters *
+136                      ;****************************
+137       000001         xtal      equ     27000000  ; XTAL frq (in MHz)
+          9BFCC0
+138    
+139       000C00         topmem    equ     $0c00     ; top p memory locations where buffers and monitor routines are located
+140    
+141       008000         rom       equ     $8000     ; starting address of the EPROM
+142       00C600         monhigh   equ     $c600     ; part of monitor to be placed on high memory
+143       008000         romlen    equ     32768     ; length of the EPROM (in bytes)
+Motorola DSP56000 Assembler  Version 3.1  96-06-20  17:37:22  boot.asm  Page 2
+DSP CARD 4/EVM56K BIOS
+
+
+144    
+145       000100         ramx      equ     $0100     ; external X RAM st address
+146       001F00         ramxlen   equ     $2000-$0100 ; external X RAM length
+147       000100         ramy      equ     $0100     ; external Y RAM st address
+148       003F00         ramylen   equ     $4000-$0100 ; external Y RAM length
+149       000200         ramp      equ     $0200     ; external P RAM st address
+150       001E00         ramplen   equ     $2000-$0200 ; external P RAM length
+151                      ;-----------------------------------------------------------------------------
+152                                endif
+153    
+154                      ; General parameters
+155       7.200000E+001  hbeat     equ     72.0      ; heartbeat blinking rate (pulses/min)
+156    
+157                      ; SCI parameters
+158       004B00         baud      equ     19200     ; SCI baud rate
+159       000800         buflen    equ     2048      ; SCI input/output buffer length
+160    
+161                      ; Protocol parameters
+162       000000         pgm_flash equ     0         ; commands
+163       000001         chg_pgm   equ     1
+164       000002         read_flash equ    2
+165       000003         load_go   equ     3
+166    
+167       000004         ack       equ     4         ; responses
+168       000005         bad_crc   equ     5
+169       000006         no_flash  equ     6
+170       000007         erase_err equ     7
+171       000008         pgm_err   equ     8
+172       000009         no_pgm    equ     9
+173    
+174       000000         dataorp   equ     0         ; download space flags
+175       000001         xory      equ     1
+176    
+177       0425D4         magicw    equ     271828    ; special magic word to detect first time reset
+178    
+179                      ; KISS special characters
+180       0000C0         fend      equ     $c0
+181       0000DB         fesc      equ     $db
+182       0000DC         tfend     equ     $dc
+183       0000DD         tfesc     equ     $dd
+184    
+185                      ; HDLC equations
+186       0000FF         flagmsk   equ     $ff       ; left justified flag mask
+187       00007E         flag      equ     %01111110 ; HDLC bit flag
+188       0000FE         abrtmsk   equ     $fe       ; left justified abort mask
+189       0000FE         abort     equ     %11111110 ; abort sequence
+190       0000FE         fivemsk   equ     $fe       ; left justified five bit mask
+191       00007C         five      equ     %01111100 ; left justified five bit sequence
+192       008408         poly      equ     $8408     ; HDLC CRC polynomial (x^16 + x^12 + x^5 + 1)
+193       00F0B8         crcchk    equ     $f0b8     ; special CRC checkword
+194    
+195                      ; flags
+196       000000         rempty    equ     0         ; SCI flags
+197       000001         rfull     equ     1
+198       000002         xempty    equ     2
+199       000003         xfull     equ     3
+200       000004         timer     equ     4         ; timer flag
+201       000005         scmode    equ     5         ; serial communication mode
+202       000006         xkissf    equ     6         ; put KISS frame begin
+203       000007         ztstflg   equ     7         ; HDLC xmitter status flags
+204       000008         zinsflg   equ     8
+205       000009         hunt      equ     9         ; HDLC receiver status flags
+206       00000A         firstb    equ     10
+207       00000B         scndb     equ     11
+208       00000C         pwrup     equ     12        ; set if power-up reset
+209       00000D         carrier   equ     13        ; carrier on/off
+210       00000E         givedat   equ     14        ; data output gate
+211    
+212    
+213                      ; macro for green LED handling
+214                      copled    macro   mode
+215  m                             b\mode  #14,x:m_pbd
+216  m                             endm
+217    
+218                      ; macro for red LED handling
+Motorola DSP56000 Assembler  Version 3.1  96-06-20  17:37:22  boot.asm  Page 3
+DSP CARD 4/EVM56K BIOS
+
+
+219                      cmdled    macro   mode
+220  m                             b\mode  #13,x:m_pbd
+221  m                             endm
+222    
+223                      ; macro for immediate move
+224                      movi      macro   data,dest
+225  m                             move    data,a1
+226  m                             move    a1,dest
+227  m                             endm
+228    
+229                      ; macro for entering interrupt service routine
+230                      ; stores x0,x1 and a registers
+231                      enter     macro   contex
+232  m                             move    x,l:<contex+0
+233  m                             move    a10,l:<contex+1
+234  m                             endm
+235    
+236                      ; macro for leaving interrupt service routine
+237                      ; restores x0,x1 and a registers
+238                      leave     macro   contex
+239  m                             move    l:<contex+0,x
+240  m                             move    l:<contex+1,a10
+241  m                             rti
+242  m                             endm
+243    
+244                      ; CRC calculation routine
+245                      ; data in the LSB of a
+246                      crc       macro   rem
+247  m                             move    #>1,x0
+248  m                             and     x0,a      rem,x0
+249  m                             eor     x0,a
+250  m                             lsr     a         #>poly,x0
+251  m                             jcc     _crc1
+252  m                             eor     x0,a
+253  m                   _crc1     move    a1,rem
+254  m                             endm
+255    
+256                      ; byte CRC calculation routine
+257                      ; byte in x0, result in x:<crcrem
+258                      crcbyte   macro
+259  m                             move    x0,b1
+260  m                             move    #>$000001,x1
+261  m                             move    #>poly,y1
+262  m                             do      #8,_crc2
+263  m 
+264  m                             move    b1,a1     ; first LSB to remainder
+265  m                             and     x1,a      x:<crcrem,y0
+266  m                             eor     y0,a
+267  m 
+268  m                             lsr     a         ; XOR if needed
+269  m                             jcc     _crc1
+270  m                             eor     y1,a
+271  m                   _crc1     lsr     b         a1,x:<crcrem
+272  m                   _crc2
+273  m                             endm
+274    
+275    
+276                      ; FLASH EPROM utilities used by DSP CARD4 (EVM does not use these)
+277                      ; macros for subroutines to read word from ROM and load one ROM image
+278                      romhdlr   macro   rdromb,rdromw,romload
+279  m                   ; read one byte from the boot ROM to x0
+280  m                   rdromb    movep   #$00f0,x:m_bcr ; slow EPROM on P bank
+281  m                             move    p:(r1)+,x0
+282  m                             move    #$0000ff,b1 ; mask unused databits off
+283  m                             and     x0,b
+284  m                             move    b1,x0
+285  m                             movep   #$0000,x:m_bcr ; no more slow EPROM reads
+286  m                             rts
+287  m 
+288  m                   ; read one word from the boot ROM to a1
+289  m                   rdromw    jsr     rdromb    ; LS byte
+290  m                             move    x0,y:<tmp
+291  m                             jsr     rdromb    ; MS byte
+292  m                             move    #>@cvi(@pow(2,8-1)),x1
+293  m                             mpy     x0,x1,a   y:<tmp,x0
+Motorola DSP56000 Assembler  Version 3.1  96-06-20  17:37:22  boot.asm  Page 4
+DSP CARD 4/EVM56K BIOS
+
+
+294  m                             move    a0,a1
+295  m                             or      x0,a
+296  m                             rts
+297  m 
+298  m                   ; load memory blocks from r1
+299  m                   romload   jsr     rdromb    ; packet id
+300  m                             move    x0,y:<mspace
+301  m 
+302  m                             jsr     rdromw    ; address
+303  m                             move    a1,r0
+304  m 
+305  m                             jsr     rdromw    ; len
+306  m                             move    a1,n0
+307  m 
+308  m                             jeq     _loaded
+309  m                             do      n0,_contld ; fetch data
+310  m                             jsr     rdromb
+311  m                             move    x0,y:<tmp
+312  m                             jsr     rdromb
+313  m                             move    #>@cvi(@pow(2,8-1)),x1
+314  m                             mpy     x0,x1,a   y:<tmp,x1
+315  m                             move    a0,a1
+316  m                             or      x1,a
+317  m                             move    a1,y:<tmp
+318  m                             jsr     rdromb
+319  m                             move    #>@cvi(@pow(2,16-1)),x1
+320  m                             mpy     x0,x1,a   y:<tmp,x1
+321  m                             move    a0,a1
+322  m                             or      x1,a
+323  m                             jclr    #dataorp,y:mspace,_d
+324  m                             move    a1,p:(r0)+ ; put to P space
+325  m                             jmp     _a
+326  m                   _d        jclr    #xory,y:mspace,_x
+327  m                             move    a1,y:(r0)+ ; put to Y space
+328  m                             jmp     _a
+329  m                   _x        move    a1,x:(r0)+ ; put to X space
+330  m                   _a        nop
+331  m                   _contld
+332  m                             jmp     romload
+333  m                   _loaded   rts
+334  m                             endm
+335    
+336    
+575    
+576                      ;****************************
+577                      ;*   56K interrupt vectors  *
+578                      ;****************************
+579    
+580                      ; Reset vector
+581       P:0000                   org     p:i_reset
+582       P:0000 0AF080            jmp     boot
+                 000040
+583    
+584                      ; Stack error interrupt
+585       P:0002                   org     p:i_stack
+586       P:0002 0AF080            jmp     shdown
+                 00000C
+587    
+588                      ; Trace interrupt
+589       P:0004                   org     p:i_trace
+590       P:0004 0AF080            jmp     shdown
+                 00000C
+591    
+592                      ; SWI
+593       P:0006                   org     p:i_swi
+594       P:0006 0AF080            jmp     shdown
+                 00000C
+595    
+596                      ; IRQA
+597       P:0008                   org     p:i_irqa
+598       P:0008 0AF080            jmp     shdown
+                 00000C
+599    
+600                      ; IRQB
+601       P:000A                   org     p:i_irqb
+Motorola DSP56000 Assembler  Version 3.1  96-06-20  17:37:22  boot.asm  Page 5
+DSP CARD 4/EVM56K BIOS
+
+
+602       P:000A 0AF080            jmp     shdown
+                 00000C
+603    
+604                      ; System error shutdown
+605       P:000C 000000  shdown    nop
+606       P:000D 000087            stop
+607    
+608                      ; SSI transmitter interrupt
+609                      ;(because syncronous mode, we can use the same interrupt for both reading and writing)
+610       P:0010                   org     p:i_ssitd
+611       P:0010 08DFEF            movep             y:(r7)+,x:m_tx
+612       P:0011 0867AF            movep             x:m_rx,x:(r7)
+613    
+614                      ; SSI transmitter interrupt with errors
+615       P:0012                   org     p:i_ssitde
+616       P:0012 0870AE            movep             x:m_sr,x:m_tx ; clear TUE
+                 00FFEF
+617    
+618                      ; SCI receive interrupt
+619       P:0014                   org     p:i_scird
+620       P:0014 0BF080            jsr     sci_rec
+                 000C40
+621    
+622                      ; SCI receive interrupt with errors
+623       P:0016                   org     p:i_scirde
+624       P:0016 0BF080            jsr     sci_rec
+                 000C40
+625    
+626                      ; SCI transmitter interrupt
+627       P:0018                   org     p:i_scitd
+628       P:0018 0BF080            jsr     sci_xmt
+                 000C2A
+629    
+630                      ; SCI timer interrupt
+631       P:001C                   org     p:i_scitm
+632       P:001C 0BF080            jsr     sci_tim
+                 000C10
+633    
+634                      ; Monitor routine jump table (here because host port is not used)
+635       P:0020                   org     p:i_hstrd
+636       P:0020 0AF080            jmp     opensci
+                 000D61
+637       P:0022 0AF080            jmp     putc
+                 000D82
+638       P:0024 0AF080            jmp     getc
+                 000DC4
+639       P:0026 0AF080            jmp     tstc
+                 000DD9
+640       P:0028 0AF080            jmp     endc
+                 000DB3
+641       P:002A 0AF080            jmp     rejc
+                 000DC2
+642       P:002C 0AF080            jmp     putbit
+                 000E38
+643       P:002E 0AF080            jmp     getbit
+                 000DDB
+644       P:0030 0AF080            jmp     opencd
+                 000E9D
+645       P:0032 0AF080            jmp     closecd
+                 000EDD
+646       P:0034 0AF080            jmp     stimer
+                 000E96
+647       P:0036 0AF080            jmp     putio
+                 000EE4
+648       P:0038 0AF080            jmp     caron
+                 000EF9
+649       P:003A 0AF080            jmp     caroff
+                 000EF0
+650    
+651                      ; Illegal instruction interrupt
+652       P:003E                   org     p:$003e
+653       P:003E 0AF080            jmp     >shdown
+                 00000C
+654    
+655                                if      !EVM56K
+Motorola DSP56000 Assembler  Version 3.1  96-06-20  17:37:22  boot.asm  Page 6
+DSP CARD 4/EVM56K BIOS
+
+
+656                      ;-----------------------------------------------------------------------------
+657                      ; At this point there is a slightly different philosophy that the EVM uses. 
+658                      ; The DSP CARD4 executes its startup code once, the re-cycles low memory after 
+659                      ; the applciation is loaded from EEPROM. With the EVM, OnCe will be use to
+660                      ; load both the application and low-level BIOS routines, it thus needs to 
+661                      ; have some valid startup code. I guess one can play some clever re-location 
+662                      ; tricks, but this will not help much to re-use low-P space easily. So what 
+663                      ; we here is to let DSP CARD4 do its usual thing, while EVM  will assemble 
+664                      ; its startup code in high-P space - tucked out of harm's way. (JF) 
+665    
+666                      ;*****************************************************************************
+667                      ;*   Start of the program for DSP CARD4                                      *
+668                      ;*****************************************************************************
+669                      ; no wait states on external memory
+670       P:0040 08F4BE  boot      movep             #$0000,x:m_bcr
+                 000000
+671    
+672                      ; initialize SCI
+673       P:0042 08F4B0            movep             #$2b02,x:m_scr ; 8,n,1
+                 002B02
+674       P:0044 08F4B2            movep             #(xtal+2*16*baud)/(2*2*16*baud)-1,x:m_sccr ; round baud
+                 000015
+675    
+676                      ; initialize port B
+677       P:0046 08F4A0            movep             #$0000,x:m_pbc ; port B as general purpose port
+                 000000
+678       P:0048 08F4A2            movep             #$60ff,x:m_pbddr ; PB0-PB7,PB13 and PB14 as outputs
+                 0060FF
+679       P:004A 08F4A4            movep             #$0000,x:m_pbd
+                 000000
+680    
+681                      ; initialize port C
+682       P:004C 08F4A1            movep             #$0003,x:m_pcc ; TXD,RXD
+                 000003
+683       P:004E 08F4A3            movep             #$001c,x:m_pcddr ; SCLK,SC0,SC1 as output
+                 00001C
+684       P:0050 08F4A5            movep             #$0008,x:m_pcd ; PDN up
+                 000008
+685    
+686                      ; initialize data structures
+687       P:0052 54F400            move              #outbuf,a1  ; SCI queue handling
+                 001800
+688       P:0054 540900            move              a1,x:<xhead
+689       P:0055 540A00            move              a1,x:<xtail
+690       P:0056 54F400            move              #inbuf,a1
+                 001000
+691       P:0058 540200            move              a1,x:<rhead
+692       P:0059 540300            move              a1,x:<rtail
+693       P:005A 05F423            move              #buflen-1,m3
+                 0007FF
+694    
+695       P:005C 73F400            move              #@cvi(30/hbeat*baud),n3 ; SCI timer system (hearbeat rate 72 pulses/min)
+                 001F40
+696       P:005E 200013            clr     a
+697       P:005F 5E0A00            move                          a,y:<timchg
+698       P:0060 5E0800            move                          a,y:<timcnt
+699       P:0061 5E1500            move                          a,y:<pertim
+700    
+701       P:0062 2C0500            move              #<(1<<rempty)|(1<<xempty),a1
+702       P:0063 5C0200            move                          a1,y:<flags ; buffer empty at first
+703    
+704       P:0064 54F400            move              #wakeup,a1
+                 000C3C
+705       P:0066 540B00            move              a1,x:<seqptr
+706    
+707                      ; check if power-up reset
+708       P:0067 5E8C00            move                          y:<pgmptr,a ; if active program location
+709       P:0068 0603A0            rep     #4-1      ; contains a special magic pattern
+710       P:0069 200022            asr     a         ; this is not a power-up reset
+711       P:006A 44F422            asr     a         #>magicw,x0
+                 0425D4
+712       P:006C 200043            eor     x0,a
+713       P:006D 0EA0C6            jeq     <chkok
+714       P:006E 0A026C            bset    #pwrup,y:<flags
+715    
+Motorola DSP56000 Assembler  Version 3.1  96-06-20  17:37:22  boot.asm  Page 7
+DSP CARD 4/EVM56K BIOS
+
+
+716                      ; hit watchdog (because system testing will take a while)
+717                                copled  chg
+719    
+720                      ; check the system (ROM)
+721       P:0070 61F400            move              #rom,r1     ; calculate ROM's CRC sum
+                 008000
+722       P:0072 54F400            move              #$00ffff,a1
+                 00FFFF
+723       P:0074 540C00            move              a1,x:<crcrem
+724    
+725       P:0075 60F400            move              #romlen,r0
+                 008000
+726       P:0077 06D000            do      r0,check1
+                 00007B
+727       P:0079 0D0107            jsr     <rdb
+728       P:007A 0D0140            jsr     <crcb
+729       P:007B 000000            nop
+730    
+731       P:007C 44F400  check1    move              #>crcchk,x0 ; check with special checkword
+                 00F0B8
+732       P:007E 568C00            move              x:<crcrem,a
+733       P:007F 200045            cmp     x0,a
+734       P:0080 0E215E            jne     <rombad
+735    
+736                      ; check the system (RAM)
+737       P:0081 54F400            move              #$00ffff,a1 ; initialize test pattern generator
+                 00FFFF
+738       P:0083 540C00            move              a1,x:<crcrem
+739    
+740       P:0084 61F400            move              #ramx,r1    ; write test pattern to X ram
+                 000100
+741       P:0086 60F400            move              #ramxlen,r0
+                 001F00
+742       P:0088 06D000            do      r0,check2a
+                 00008C
+743       P:008A 240000            move              #0,x0
+744       P:008B 0D0150            jsr     <tstpat
+745       P:008C 545900            move              a1,x:(r1)+
+746                      check2a
+747    
+748       P:008D 61F400            move              #ramy,r1    ; write test pattern to Y ram
+                 000100
+749       P:008F 60F400            move              #ramylen,r0
+                 003F00
+750       P:0091 06D000            do      r0,check2b
+                 000095
+751       P:0093 240000            move              #0,x0
+752       P:0094 0D0150            jsr     <tstpat
+753       P:0095 5C5900            move                          a1,y:(r1)+
+754                      check2b
+755    
+756       P:0096 61F400            move              #ramp,r1    ; write test pattern to P ram
+                 000200
+757       P:0098 60F400            move              #ramplen,r0
+                 001E00
+758       P:009A 06D000            do      r0,check2c
+                 00009E
+759       P:009C 240000            move              #0,x0
+760       P:009D 0D0150            jsr     <tstpat
+761       P:009E 07598C            move              a1,p:(r1)+
+762                      check2c
+763    
+764       P:009F 54F400            move              #$00ffff,a1 ; initialize test pattern generator
+                 00FFFF
+765       P:00A1 540C00            move              a1,x:<crcrem
+766    
+767       P:00A2 61F400            move              #ramx,r1    ; test X ram
+                 000100
+768       P:00A4 60F400            move              #ramxlen,r0
+                 001F00
+769       P:00A6 240000            move              #0,x0
+770       P:00A7 06D000            do      r0,check3a
+                 0000AD
+771       P:00A9 0D0150            jsr     <tstpat
+772       P:00AA 44D900            move              x:(r1)+,x0
+Motorola DSP56000 Assembler  Version 3.1  96-06-20  17:37:22  boot.asm  Page 8
+DSP CARD 4/EVM56K BIOS
+
+
+773       P:00AB 240043            eor     x0,a      #0,x0
+774       P:00AC 0E2162            jne     <rambad
+775       P:00AD 000000            nop
+776                      check3a
+777    
+778       P:00AE 61F400            move              #ramy,r1    ; test Y ram
+                 000100
+779       P:00B0 60F400            move              #ramylen,r0
+                 003F00
+780       P:00B2 240000            move              #0,x0
+781       P:00B3 06D000            do      r0,check3b
+                 0000B9
+782       P:00B5 0D0150            jsr     <tstpat
+783       P:00B6 4CD900            move                          y:(r1)+,x0
+784       P:00B7 240043            eor     x0,a      #0,x0
+785       P:00B8 0E2162            jne     <rambad
+786       P:00B9 000000            nop
+787                      check3b
+788    
+789       P:00BA 61F400            move              #ramp,r1    ; test P ram
+                 000200
+790       P:00BC 60F400            move              #ramplen,r0
+                 001E00
+791       P:00BE 240000            move              #0,x0
+792       P:00BF 06D000            do      r0,check3c
+                 0000C5
+793       P:00C1 0D0150            jsr     <tstpat
+794       P:00C2 07D984            move              p:(r1)+,x0
+795       P:00C3 240043            eor     x0,a      #0,x0
+796       P:00C4 0E2162            jne     <rambad
+797       P:00C5 000000            nop
+798                      check3c
+799    
+800                      ; read the remaining monitor to the upper memory
+801       P:00C6 61F400  chkok     move              #monhigh,r1
+                 00C600
+802       P:00C8 0D0119            jsr     <memload
+803    
+804                      ; start interrupts
+805       P:00C9 08F4BF            movep             #$b000,x:m_ipr ; SSI=IPL2, SCI=IPL1
+                 00B000
+806       P:00CB 00FCB8            andi    #$fc,mr   ; unmask interrupts
+807    
+808                      ; wait 1 s for the (possible) command
+809                                cmdled  set
+811       P:00CD 44F400            move              #>ack,x0    ; tell to host that we managed to get out from the reset
+                 000004
+812       P:00CF 0BF080            jsr     putc
+                 000D82
+813       P:00D1 44F400            move              #>(day<<3)|((month-1)>>1),x0
+                 00005A
+814       P:00D3 0BF080            jsr     putc
+                 000D82
+815       P:00D5 44F400            move              #>((month-1)<<7)|(year-1900),x0
+                 0002E0
+816       P:00D7 0BF080            jsr     putc
+                 000D82
+817    
+818       P:00D9 44F400            move              #>@cvi(1.0*baud),x0 ; set timer
+                 004B00
+819       P:00DB 0BF080            jsr     stimer
+                 000E96
+820       P:00DD 000086  _wchr     wait
+821       P:00DE 0BF080            jsr     getc      ; wait for chr of timer
+                 000DC4
+822       P:00E0 0E0101            jcc     <cmdok
+823       P:00E1 0A02E4            jset    #timer,y:<flags,_wchr
+                 0000DD
+824    
+825                      ldpgm     cmdled  clr       ; no complete command, turn cmd led off
+827       P:00E4 5E8C00            move                          y:<pgmptr,a
+828       P:00E5 0A02EC            jset    #pwrup,y:<flags,firstrs
+                 0000FB
+829    
+830       P:00E7 44F400  _nopgm    move              #>$00000f,x0 ; no, calculate next pgm slot number
+Motorola DSP56000 Assembler  Version 3.1  96-06-20  17:37:22  boot.asm  Page 9
+DSP CARD 4/EVM56K BIOS
+
+
+                 00000F
+831       P:00E9 44F446            and     x0,a      #>1,x0
+                 000001
+832       P:00EB 45F440            add     x0,a      #>16,x1     ; robin round if last pgm slot number
+                 000010
+833       P:00ED 200065            cmp     x1,a
+834       P:00EE 021040            tge     x0,a
+835       P:00EF 5C0C00            move                          a1,y:<pgmptr
+836       P:00F0 0BF080            jsr     ldadr
+                 000FA0
+837       P:00F2 5E8C00            move                          y:<pgmptr,a
+838       P:00F3 0EA0E7            jeq     <_nopgm
+839       P:00F4 57F400  ldnextp   move              #>magicw<<4,b ; active pgm slot found, store slot number
+                 425D40
+840       P:00F6 218400            move              a1,x0
+841       P:00F7 20004A            or      x0,b
+842       P:00F8 5D0C00            move                          b1,y:<pgmptr
+843       P:00F9 0AF080            jmp     lromg     ; and load image from ROM and jump to it
+                 000D5B
+844    
+845       P:00FB 61F400  firstrs   move              #rom+2,r1   ; first reset, check if there are autoboot programs
+                 008002
+846       P:00FD 0D0110            jsr     <rdw
+847       P:00FE 0E20F4            jne     <ldnextp
+848    
+849       P:00FF 000086  _idling   wait    ; nothing to do (no command given, no program to load from ROM)
+850       P:0100 0C00FF            jmp     <_idling
+851    
+852                      ; command read, search command
+853       P:0101 56F400  cmdok     move              #>load_go,a
+                 000003
+854       P:0103 200045            cmp     x0,a
+855       P:0104 0AF0AA            jeq     lg
+                 000CE2
+856    
+857       P:0106 0C00E3            jmp     <ldpgm
+858    
+859    
+860                      ; temporary utility routines in internal memory
+861                                romhdlr rdb,rdw,memload
+917    
+918                      crcb      crcbyte
+933       P:014F 00000C            rts
+934    
+935                      ; pseudonoise RAM test pattern generator (pattern in a)
+936       P:0150 0D0140  tstpat    jsr     <crcb
+937       P:0151 568C00            move              x:<crcrem,a
+938       P:0152 0607A0            rep     #8-1
+939       P:0153 200033            lsl     a
+940       P:0154 458C33            lsl     a         x:<crcrem,x1
+941       P:0155 200063            eor     x1,a
+942       P:0156 00000C            rts
+943    
+944                      ; 100 ms software delay
+945       P:0157 06C785  dly100    do      #@cvi(@sqt(xtal/2.0/10.0)),_romb2
+                 00015C
+946       P:0159 06C785            do      #@cvi(@sqt(xtal/2.0/10.0)),_romb1
+                 00015B
+947       P:015B 000000            nop
+948       P:015C 000000  _romb1    nop
+949       P:015D 00000C  _romb2    rts
+950    
+951                      ; show that ROM has failed crc check (red and green led blinks at 10 Hz)
+952       P:015E 0D0157  rombad    jsr     <dly100
+953                                copled  chg
+955                                cmdled  chg
+957       P:0161 0C015E            jmp     <rombad
+958    
+959                      ; show that RAM has failed check (greed led blinks at 10 Hz, red led blinks at 5 Hz)
+960       P:0162 0D0157  rambad    jsr     <dly100
+961                                copled  chg
+963                                cmdled  chg
+965       P:0165 0D0157            jsr     <dly100
+966                                copled  chg
+968       P:0167 0C0162            jmp     <rambad
+Motorola DSP56000 Assembler  Version 3.1  96-06-20  17:37:22  boot.asm  Page 10
+DSP CARD 4/EVM56K BIOS
+
+
+969                      ;-----------------------------------------------------------------------------
+970                                endif
+971    
+972                      ;*****************************************************************************
+973                      ;*         The following code will be placed to top p-memory bank           *
+974                      ;*****************************************************************************
+975    
+976       P:0C00                   org     p:topmem
+977    
+978                      ; KISS parameter table (here because of fixed address)
+979       P:0C00         kisspar   dc      @cvi(50*baud/100.0) ; txdelay
+980       P:0C01                   dc      63        ; P
+981       P:0C02                   dc      @cvi(10*baud/100.0) ; SlotTim
+982       P:0C03                   dc      @cvi(1*baud/100.0) ; TXtail
+983       P:0C04                   dc      0         ; FullDup
+984       000005         kissext   equ     *-kisspar
+985                                dup     16-(*-kisspar)
+986  m                             dc      0         ; extra KISS parameters
+987  m                             endm
+999       000010         kisses    equ     *-kisspar
+1000   
+1001   
+1002                     ;****************************
+1003                     ;*    SCI timer interrupt   *
+1004                     ;****************************
+1005                     sci_tim   enter   scidata   ; only a1,a0,x1,x0 are saved
+1008   
+1009                     ; increment timer
+1010      P:0C12 05F423            move              #-1,m3      ; yes, set next time
+                 FFFFFF
+1011      P:0C14 6B8800            move                          y:<timcnt,r3
+1012   
+1013                     ; check if destination time reached
+1014      P:0C15 5C8900            move                          y:<timval,a1
+1015      P:0C16 226400            move              r3,x0
+1016      P:0C17 205B43            eor     x0,a      (r3)+
+1017      P:0C18 0AF0A2            jne     _scit1
+                 000C1B
+1018      P:0C1A 0A0244            bclr    #timer,y:<flags ; yes, clear flag bit
+1019   
+1020                     ; check if watch-dog interval reached
+1021      P:0C1B 5C8A00  _scit1    move                          y:<timchg,a1
+1022      P:0C1C 6B0843            eor     x0,a                  r3,y:<timcnt
+1023      P:0C1D 0AF0A2            jne     scite
+                 000C23
+1024                               copled  chg
+1026      P:0C20 204B00            move              (r3)+n3
+1027      P:0C21 000000            nop
+1028      P:0C22 6B0A00            move                          r3,y:<timchg
+1029   
+1030      P:0C23 0BF080  scite     jsr     pertick   ; xmit control module timer
+                 000F53
+1031      P:0C25 05F423            move              #buflen-1,m3
+                 0007FF
+1032                               leave   scidata
+1036   
+1037   
+1038   
+1039                     ;****************************
+1040                     ;*    SCI xmit interrupt    *
+1041                     ;****************************
+1042                     sci_xmt   enter   scidata   ; only a1,a0,x1,x0 are saved
+1045   
+1046      P:0C2C 638A00            move              x:<xtail,r3
+1047      P:0C2D 448900            move              x:<xhead,x0
+1048      P:0C2E 08DB74            movep             p:(r3)+,x:m_stxl
+1049      P:0C2F 630A00            move              r3,x:<xtail
+1050   
+1051      P:0C30 0A0243            bclr    #xfull,y:<flags ; don't bother to check buffer state if it is full
+1052      P:0C31 0AF0A8            jcs     scixe
+                 000C39
+1053   
+1054                     ; check if buffer empty
+1055      P:0C33 226C00            move              r3,a1
+1056      P:0C34 200043            eor     x0,a
+Motorola DSP56000 Assembler  Version 3.1  96-06-20  17:37:22  boot.asm  Page 11
+DSP CARD 4/EVM56K BIOS
+
+
+1057      P:0C35 0AF0A2            jne     scixe
+                 000C39
+1058   
+1059                     ; yes, shut down xmitter
+1060      P:0C37 0A0262            bset    #xempty,y:<flags
+1061      P:0C38 0AB00C            bclr    #m_tie,x:m_scr
+1062   
+1063                     scixe     leave   scidata
+1067   
+1068   
+1069                     ;****************************
+1070                     ;*   SCI receive interrupt  *
+1071                     ;****************************
+1072      P:0C3C         wakeup    dc      $12,$b9,$b0,$a1
+1073                     sci_rec   enter   scidata   ; only a1,a0,x1,x0 are saved
+1076   
+1077      P:0C42 084531            movep             x:m_ssr,x1  ; clear SCI errors
+1078   
+1079                     ; first check for special wake-up sequence
+1080      P:0C43 638B00            move              x:<seqptr,r3
+1081      P:0C44 084534            movep             x:m_srxl,x1 ; read byte to x1
+1082      P:0C45 07DB8C            move              p:(r3)+,a1
+1083      P:0C46 44F463            eor     x1,a      #>wakeup+4,x0
+                 000C40
+1084      P:0C48 0AF0AA            jeq     scir1
+                 000C4E
+1085      P:0C4A 63F400            move              #wakeup,r3
+                 000C3C
+1086      P:0C4C 0AF080            jmp     scir2
+                 000C53
+1087      P:0C4E 226C00  scir1     move              r3,a1
+1088      P:0C4F 200043            eor     x0,a
+1089      P:0C50 0AF0A2            jne     scir2
+                 000C53
+1090   
+1091                     ; wake-up sequence detected (boot the system up)
+1092      P:0C52 000087            stop    ; watchdog will give reset pulse
+1093   
+1094                     ; no wake-up sequence detected, continue searching
+1095      P:0C53 630B00  scir2     move              r3,x:<seqptr
+1096   
+1097                     ; then check that there are room left in the buffer
+1098      P:0C54 0A02E1            jset    #rfull,y:<flags,scire
+                 000CDF
+1099   
+1100                     ; yes, determine in which mode we are (normal, KISS mode)
+1101      P:0C56 0A02E5            jset    #scmode,y:<flags,scir3
+                 000C64
+1102   
+1103                     ; * normal mode, put data to buffer
+1104      P:0C58 638200            move              x:<rhead,r3
+1105      P:0C59 0A0240            bclr    #rempty,y:<flags
+1106      P:0C5A 075B85            move              x1,p:(r3)+
+1107      P:0C5B 630200            move              r3,x:<rhead
+1108   
+1109                     ; check buffer full condition
+1110      P:0C5C 226C00            move              r3,a1
+1111      P:0C5D 448300            move              x:<rtail,x0
+1112      P:0C5E 200043            eor     x0,a
+1113      P:0C5F 0AF0A2            jne     scire
+                 000CDF
+1114      P:0C61 0A0261            bset    #rfull,y:<flags
+1115   
+1116      P:0C62 0AF080            jmp     scire
+                 000CDF
+1117   
+1118                     ; * KISS protocol mode, read received character
+1119      P:0C64 638D00  scir3     move              x:<getkst,r3
+1120      P:0C65 2CC000            move              #fend,a1
+1121      P:0C66 0AE380            jmp     (r3)      ; determine what to do for it
+1122   
+1123                     ; --- State 0, waiting for FEND
+1124      P:0C67 44F463  str0      eor     x1,a      #>str1,x0
+                 000C6E
+1125      P:0C69 0AF0A2            jne     scire     ; we didn't see FEND, keep looking
+Motorola DSP56000 Assembler  Version 3.1  96-06-20  17:37:22  boot.asm  Page 12
+DSP CARD 4/EVM56K BIOS
+
+
+                 000CDF
+1126      P:0C6B 440D00            move              x0,x:<getkst ; FEND found, change state
+1127      P:0C6C 0AF080            jmp     scire
+                 000CDF
+1128   
+1129                     ; --- State 1, we have seen FEND, look for the command byte
+1130      P:0C6E 44F463  str1      eor     x1,a      #>str2,x0
+                 000C80
+1131      P:0C70 0AF0AA            jeq     scire     ; just another FEND, keep looking for cmd
+                 000CDF
+1132                     ; analyze command byte
+1133      P:0C72 2C0000            move              #0,a1
+1134      P:0C73 451063            eor     x1,a      x1,x:<kisscmd
+1135      P:0C74 0AF0AA            jeq     str1b     ; cmd 0, data will follow
+                 000C7B
+1136                     ; store cmd and change state
+1137      P:0C76 54F400  str1a     move              #str4,a1
+                 000CBB
+1138      P:0C78 540D00            move              a1,x:<getkst
+1139      P:0C79 0AF080            jmp     scire
+                 000CDF
+1140                     ; start a new frame
+1141      P:0C7B 440D00  str1b     move              x0,x:<getkst
+1142      P:0C7C 548200            move              x:<rhead,a1 ; get current rhead
+1143      P:0C7D 540E00            move              a1,x:<rnhead
+1144      P:0C7E 0AF080            jmp     scire
+                 000CDF
+1145   
+1146                     ; --- State 2, data to follow
+1147      P:0C80 200063  str2      eor     x1,a      ; check if end of frame
+1148      P:0C81 0AF0AA            jeq     strend
+                 000C8C
+1149      P:0C83 2CDB00            move              #fesc,a1
+1150      P:0C84 200063            eor     x1,a      ; check if escape
+1151      P:0C85 0AF0A2            jne     store
+                 000CA9
+1152                     ; escape character found
+1153      P:0C87 54F400            move              #str3,a1    ; enter FESC found state
+                 000C90
+1154      P:0C89 540D00            move              a1,x:<getkst
+1155      P:0C8A 0AF080            jmp     scire
+                 000CDF
+1156                     ; end of frame, store negative value
+1157      P:0C8C 45F400  strend    move              #-1,x1
+                 FFFFFF
+1158      P:0C8E 0AF080            jmp     store
+                 000CA9
+1159   
+1160                     ; --- State 3, saw FESC, expecting TFESC or TFEND
+1161      P:0C90 2CDD00  str3      move              #tfesc,a1   ; check if TFESC
+1162      P:0C91 200063            eor     x1,a
+1163      P:0C92 0AF0AA            jeq     str3esc
+                 000C9D
+1164      P:0C94 2CDC00            move              #tfend,a1
+1165      P:0C95 200063            eor     x1,a      ; check if TFEND
+1166      P:0C96 0AF0AA            jeq     str3end
+                 000CA4
+1167      P:0C98 54F400            move              #str2,a1
+                 000C80
+1168      P:0C9A 540D00            move              a1,x:<getkst ; something wrong has happened,
+1169      P:0C9B 0AF080            jmp     scire     ; go back to the data receiving mode
+                 000CDF
+1170                     ; we have seen TFESC after an FESC, write an FESC
+1171      P:0C9D 54F400  str3esc   move              #str2,a1
+                 000C80
+1172      P:0C9F 540D00            move              a1,x:<getkst
+1173      P:0CA0 45F400            move              #>fesc,x1
+                 0000DB
+1174      P:0CA2 0AF080            jmp     store
+                 000CA9
+1175                     ; we have seen TFEND after an FESC, write an FEND
+1176      P:0CA4 54F400  str3end   move              #str2,a1
+                 000C80
+1177      P:0CA6 540D00            move              a1,x:<getkst
+1178      P:0CA7 45F400            move              #>fend,x1
+Motorola DSP56000 Assembler  Version 3.1  96-06-20  17:37:22  boot.asm  Page 13
+DSP CARD 4/EVM56K BIOS
+
+
+                 0000C0
+1179   
+1180                     ; store the character to the queue
+1181      P:0CA9 638E00  store     move              x:<rnhead,r3
+1182      P:0CAA 448300            move              x:<rtail,x0
+1183      P:0CAB 075B85            move              x1,p:(r3)+
+1184      P:0CAC 226C00            move              r3,a1       ; check buffer full
+1185      P:0CAD 630E43            eor     x0,a      r3,x:<rnhead
+1186      P:0CAE 0AF0AA            jeq     scr_st0   ; queue full, discard current frame
+                 000CDC
+1187                     ; check if end of frame
+1188      P:0CB0 54F400            move              #-1,a1
+                 FFFFFF
+1189      P:0CB2 458E63            eor     x1,a      x:<rnhead,x1
+1190      P:0CB3 0AF0A2            jne     scire
+                 000CDF
+1191   
+1192      P:0CB5 450200            move              x1,x:<rhead ; yes, reset real buffer write pointer
+1193      P:0CB6 0A0240            bclr    #rempty,y:<flags
+1194      P:0CB7 0BF080            jsr     frmrec    ; inform xmit control module
+                 000F04
+1195      P:0CB9 0AF080            jmp     scr_st0
+                 000CDC
+1196   
+1197                     ; --- State 4, get command data
+1198      P:0CBB 5A0300  str4      move                          a2,y:<tmp   ; backup a2
+1199      P:0CBC 569000            move              x:<kisscmd,a ; check if a local parameter
+1200      P:0CBD 44F400            move              #>kisses,x0
+                 000010
+1201      P:0CBF 44F445            cmp     x0,a      #>P,x0
+                 000002
+1202      P:0CC1 0AF0A7            jgt     str4c
+                 000CD8
+1203   
+1204      P:0CC3 44F445            cmp     x0,a      #>kissext,x0 ; local parameter, check if a time parameter
+                 000005
+1205      P:0CC5 0AF0AA            jeq     str4a
+                 000CCB
+1206      P:0CC7 44F445            cmp     x0,a      #>kisspar-1,x0
+                 000BFF
+1207      P:0CC9 0AF0AF            jle     str4b
+                 000CD3
+1208   
+1209      P:0CCB 44F400  str4a     move              #>kisspar-1,x0
+                 000BFF
+1210      P:0CCD 200040            add     x0,a      ; no, store it without any conversion
+1211      P:0CCE 21D300            move              a,r3
+1212      P:0CCF 000000            nop
+1213      P:0CD0 076385            move              x1,p:(r3)
+1214      P:0CD1 0AF080            jmp     str4c
+                 000CD8
+1215   
+1216      P:0CD3 44F440  str4b     add     x0,a      #>baud/100,x0 ; yes, time scale parameter
+                 0000C0
+1217      P:0CD5 21D3A0            mpy     x0,x1,a   a,r3
+1218      P:0CD6 200022            asr     a         ; interger multiply correction
+1219      P:0CD7 076388            move              a0,p:(r3)   ; product in low order word
+1220   
+1221      P:0CD8 6B8E00  str4c     move                          y:<kisssub,r3 ; give also the parameter to the user application
+1222      P:0CD9 569000            move              x:<kisscmd,a
+1223      P:0CDA 0BE380            jsr     (r3)      ; a1 - cmd, x1 - data
+1224      P:0CDB 5A8300            move                          y:<tmp,a2
+1225   
+1226                     ; go back to FEND hunt state
+1227      P:0CDC 54F400  scr_st0   move              #str0,a1
+                 000C67
+1228      P:0CDE 540D00            move              a1,x:<getkst
+1229   
+1230                     scire     leave   scidata
+1234   
+1235   
+1236                               if      !EVM56K
+1237                     ;-----------------------------------------------------------------------------
+1238                     ; Some further DSP CARD4 EEPROM loader code
+1239   
+Motorola DSP56000 Assembler  Version 3.1  96-06-20  17:37:22  boot.asm  Page 14
+DSP CARD 4/EVM56K BIOS
+
+
+1240                     ;**************************
+1241                     ;* LOAD FROM HOST AND GO  *
+1242                     ;**************************
+1243      P:0CE2 44F400  lg        move              #>ack,x0    ; tell to host that command was accepted
+                 000004
+1244      P:0CE4 0BF080            jsr     putc
+                 000D82
+1245   
+1246      P:0CE6 54F400  lghunt    move              #$00ffff,a1 ; try to find beginning of the frame
+                 00FFFF
+1247      P:0CE8 540C00            move              a1,x:<crcrem
+1248      P:0CE9 0BF080            jsr     rdbyte
+                 000F74
+1249      P:0CEB 0AF0A8            jcs     xmtnak
+                 000D47
+1250      P:0CED 56F400            move              #>flag,a
+                 00007E
+1251      P:0CEF 200045            cmp     x0,a
+1252      P:0CF0 0E2CE6            jne     lghunt
+1253   
+1254      P:0CF1 0BF080            jsr     rdbyte    ; packet id
+                 000F74
+1255      P:0CF3 0AF0A8            jcs     xmtnak
+                 000D47
+1256      P:0CF5 4C0B00            move                          x0,y:<mspace
+1257   
+1258      P:0CF6 0BF080            jsr     rdword    ; address
+                 000F65
+1259      P:0CF8 0AF0A8            jcs     xmtnak
+                 000D47
+1260      P:0CFA 219000            move              a1,r0
+1261   
+1262      P:0CFB 0BF080            jsr     rdword    ; len
+                 000F65
+1263      P:0CFD 0AF0A8            jcs     xmtnak
+                 000D47
+1264      P:0CFF 219800            move              a1,n0
+1265   
+1266      P:0D00 0BF080            jsr     rdbyte    ; CRC
+                 000F74
+1267      P:0D02 0AF0A8            jcs     xmtnak
+                 000D47
+1268      P:0D04 0BF080            jsr     rdbyte
+                 000F74
+1269      P:0D06 0AF0A8            jcs     xmtnak
+                 000D47
+1270      P:0D08 44F400            move              #>crcchk,x0
+                 00F0B8
+1271      P:0D0A 568C00            move              x:<crcrem,a
+1272      P:0D0B 200045            cmp     x0,a
+1273      P:0D0C 0AF0A2            jne     xmtnak
+                 000D47
+1274   
+1275      P:0D0E 54F400            move              #$00ffff,a1
+                 00FFFF
+1276      P:0D10 540C00            move              a1,x:<crcrem
+1277      P:0D11 230E00            move              n0,a
+1278      P:0D12 200003            tst     a
+1279      P:0D13 0AF0AA            jeq     rdytogo
+                 000D4C
+1280   
+1281      P:0D15 06D800            do      n0,alldata ; fetch data
+                 000D3A
+1282      P:0D17 0BF080            jsr     rdbyte
+                 000F74
+1283      P:0D19 0AF0A8            jcs     xmtnak
+                 000D47
+1284      P:0D1B 45F400            move              #>@cvi(@pow(2,16-1)),x1
+                 008000
+1285      P:0D1D 2000A0            mpy     x0,x1,a
+1286      P:0D1E 580300            move                          a0,y:<tmp
+1287      P:0D1F 0BF080            jsr     rdbyte
+                 000F74
+1288      P:0D21 0AF0A8            jcs     xmtnak
+                 000D47
+Motorola DSP56000 Assembler  Version 3.1  96-06-20  17:37:22  boot.asm  Page 15
+DSP CARD 4/EVM56K BIOS
+
+
+1289      P:0D23 45F400            move              #>@cvi(@pow(2,8-1)),x1
+                 000080
+1290      P:0D25 4D83A0            mpy     x0,x1,a               y:<tmp,x1
+1291      P:0D26 210C00            move              a0,a1
+1292      P:0D27 200062            or      x1,a
+1293      P:0D28 5C0300            move                          a1,y:<tmp
+1294      P:0D29 0BF080            jsr     rdbyte
+                 000F74
+1295      P:0D2B 0AF0A8            jcs     xmtnak
+                 000D47
+1296      P:0D2D 5E8300            move                          y:<tmp,a
+1297      P:0D2E 200042            or      x0,a
+1298      P:0D2F 0A0BC0            jclr    #dataorp,y:mspace,_d
+                 000D34
+1299      P:0D31 07588C            move              a1,p:(r0)+  ; put to P space
+1300      P:0D32 0AF080            jmp     _a
+                 000D3A
+1301      P:0D34 0A0BC1  _d        jclr    #xory,y:mspace,_x
+                 000D39
+1302      P:0D36 5C5800            move                          a1,y:(r0)+  ; put to Y space
+1303      P:0D37 0AF080            jmp     _a
+                 000D3A
+1304      P:0D39 545800  _x        move              a1,x:(r0)+  ; put to X space
+1305      P:0D3A 000000  _a        nop
+1306                     alldata
+1307   
+1308      P:0D3B 0BF080            jsr     rdbyte    ; CRC
+                 000F74
+1309      P:0D3D 0BF080            jsr     rdbyte
+                 000F74
+1310      P:0D3F 44F400            move              #>crcchk,x0
+                 00F0B8
+1311      P:0D41 568C00            move              x:<crcrem,a
+1312      P:0D42 44F445            cmp     x0,a      #>ack,x0
+                 000004
+1313   
+1314      P:0D44 0BF080            jsr     putc      ; crc ok, wait for the next
+                 000D82
+1315      P:0D46 0C0CE6            jmp     lghunt
+1316   
+1317      P:0D47 44F400  xmtnak    move              #>bad_crc,x0 ; crc bad, ignore frame and try again
+                 000005
+1318      P:0D49 0BF080            jsr     putc
+                 000D82
+1319      P:0D4B 0C0CE6            jmp     lghunt
+1320   
+1321      P:0D4C 44F400  rdytogo   move              #>ack,x0    ; crc ok, if len=0 then jump to the user code
+                 000004
+1322      P:0D4E 0BF080            jsr     putc
+                 000D82
+1323                               cmdled  clr
+1325      P:0D51 0C0040            jmp     <boot
+1326   
+1327      P:0D52 44F400  sherror   move              #>@cvi(0.5*baud),x0 ; error condition, blink cmd led
+                 002580
+1328      P:0D54 0BF080            jsr     stimer
+                 000E96
+1329      P:0D56 000086  _sherro   wait
+1330      P:0D57 0A02E4            jset    #timer,y:<flags,_sherro
+                 000D56
+1331                               cmdled  chg
+1333      P:0D5A 0C0D52            jmp     sherror
+1334   
+1335   
+1336                     ;********************
+1337                     ;* LOAD ROM AND GO  *
+1338                     ;********************
+1339                     ; program number is in a1 register
+1340      P:0D5B 0BF080  lromg     jsr     ldadr
+                 000FA0
+1341      P:0D5D 219100            move              a1,r1
+1342      P:0D5E 0BF080            jsr     romload   ; then load the program
+                 000FBB
+1343      P:0D60 0C0040            jmp     <boot     ; and finally jump to it
+1344                     ;-----------------------------------------------------------------------------
+Motorola DSP56000 Assembler  Version 3.1  96-06-20  17:37:22  boot.asm  Page 16
+DSP CARD 4/EVM56K BIOS
+
+
+1345                               endif
+1346   
+1347   
+1348                     ;****************************
+1349                     ;*     Open Serial line     *
+1350                     ;****************************
+1351                     ; flushes all buffers and set the desired communication speed
+1352                     ;   a - kiss command routine address (zero if not is kiss mode)
+1353                     ;   b - xmit on/off routine address
+1354      P:0D61 5C0E00  opensci   move                          a1,y:<kisssub
+1355      P:0D62 0A0245            bclr    #scmode,y:<flags
+1356      P:0D63 54F403            tst     a         #str0,a1
+                 000C67
+1357      P:0D65 0AF0AA            jeq     opensce
+                 000D81
+1358   
+1359                     ; KISS mode, initialize handlers
+1360      P:0D67 5D1400            move                          b1,y:<xmitsub ; store given addresses
+1361      P:0D68 540D00            move              a1,x:<getkst
+1362      P:0D69 55F400            move              #(1<<xoff),b1
+                 000008
+1363      P:0D6B 55151B            clr     b         b1,x:<pstate ; and initialize xmit control module
+1364      P:0D6C 5D1500            move                          b1,y:<pertim
+1365   
+1366      P:0D6D 0A0265            bset    #scmode,y:<flags
+1367      P:0D6E 0A0246            bclr    #xkissf,y:<flags
+1368   
+1369                               movi    #xstD,y:<xstate ; initialize coder
+1372                               movi    #flag,y:<xdata
+1375                               movi    #$0,y:<x5bit
+1378                               movi    #0,y:<xbit
+1381      P:0D78 0A0247            bclr    #ztstflg,y:<flags
+1382      P:0D79 0A0248            bclr    #zinsflg,y:<flags
+1383   
+1384                               movi    #0,x:<rdata ; initialize decoder
+1387                               movi    #$0,x:<rflag
+1390      P:0D7E 0A0269            bset    #hunt,y:<flags
+1391      P:0D7F 0A026A            bset    #firstb,y:<flags
+1392      P:0D80 0A026B            bset    #scndb,y:<flags
+1393   
+1394      P:0D81 00000C  opensce   rts
+1395   
+1396   
+1397                     ;****************************
+1398                     ;*  Put character to queue  *
+1399                     ;****************************
+1400                     ; byte in x0
+1401                     ; returns  Z if buffer full
+1402                     ;         NZ otherwise
+1403      P:0D82 0002F8  putc      ori     #$02,mr   ; disable interrupts
+1404      P:0D83 000000            nop
+1405      P:0D84 000000            nop
+1406      P:0D85 0A02E5            jset    #scmode,y:<flags,putkiss
+                 000D98
+1407   
+1408                     ; * normal mode
+1409      P:0D87 458A00            move              x:<xtail,x1
+1410      P:0D88 548900            move              x:<xhead,a1
+1411      P:0D89 219300            move              a1,r3
+1412   
+1413                     ; xmitter was running, check if there are free space left
+1414      P:0D8A 0A0242            bclr    #xempty,y:<flags ; if buffer empty, sure there are free space left
+1415      P:0D8B 0AF0A8            jcs     putc1
+                 000D93
+1416      P:0D8D 200063            eor     x1,a      ; if read ptr <> write ptr there are also free space left
+1417      P:0D8E 0AF0A2            jne     putc2
+                 000D94
+1418   
+1419                     ; buffer full state reached (ignore given data)
+1420      P:0D90 0A0263            bset    #xfull,y:<flags
+1421      P:0D91 0AF080            jmp     putce
+                 000DB1
+1422   
+1423                     ; there was free space left, write character to the buffer
+1424      P:0D93 0AB02C  putc1     bset    #m_tie,x:m_scr ; start xmitter interrupts
+Motorola DSP56000 Assembler  Version 3.1  96-06-20  17:37:22  boot.asm  Page 17
+DSP CARD 4/EVM56K BIOS
+
+
+1425      P:0D94 075B84  putc2     move              x0,p:(r3)+
+1426      P:0D95 630900            move              r3,x:<xhead
+1427      P:0D96 0AF080            jmp     putce
+                 000DB1
+1428   
+1429   
+1430                     ; * KISS mode, check if start of new KISS frame
+1431      P:0D98 0A02E6  putkiss   jset    #xkissf,y:<flags,putk1
+                 000DA2
+1432   
+1433                     ; yes, send KISS preamble
+1434      P:0D9A 0A0266            bset    #xkissf,y:<flags
+1435      P:0D9B 638900            move              x:<xhead,r3
+1436      P:0D9C 630F00            move              r3,x:<xnhead
+1437   
+1438      P:0D9D 2CC000            move              #fend,a1
+1439      P:0D9E 075B8C            move              a1,p:(r3)+
+1440      P:0D9F 2C0000            move              #0,a1
+1441      P:0DA0 075B8C            move              a1,p:(r3)+
+1442   
+1443      P:0DA1 630F00            move              r3,x:<xnhead
+1444   
+1445                     ; no, send pure data only
+1446      P:0DA2 638F00  putk1     move              x:<xnhead,r3
+1447   
+1448      P:0DA3 2CDB00            move              #fesc,a1    ; check if FESC
+1449      P:0DA4 2DDD43            eor     x0,a      #tfesc,b1
+1450      P:0DA5 0AF0AA            jeq     putkspe
+                 000DAB
+1451   
+1452      P:0DA7 2CC000            move              #fend,a1    ; check if FEND
+1453      P:0DA8 2DDC43            eor     x0,a      #tfend,b1
+1454      P:0DA9 0AF0A2            jne     putke1
+                 000DAF
+1455   
+1456                     ; special character, enter escaped special character
+1457      P:0DAB 44F400  putkspe   move              #>fesc,x0
+                 0000DB
+1458      P:0DAD 075B84            move              x0,p:(r3)+
+1459      P:0DAE 21A400            move              b1,x0
+1460   
+1461      P:0DAF 075B84  putke1    move              x0,p:(r3)+
+1462      P:0DB0 630F00            move              r3,x:<xnhead
+1463   
+1464      P:0DB1 00FCB8  putce     andi    #$fc,mr
+1465      P:0DB2 00000C            rts
+1466   
+1467   
+1468                     ;****************************
+1469                     ;* End current KISS frame   *
+1470                     ;****************************
+1471      P:0DB3 0002F8  endc      ori     #$02,mr   ; disable interrupts
+1472      P:0DB4 000000            nop
+1473      P:0DB5 000000            nop
+1474      P:0DB6 000000            nop
+1475      P:0DB7 0A0246            bclr    #xkissf,y:<flags
+1476   
+1477      P:0DB8 638F00            move              x:<xnhead,r3 ; write last fend
+1478      P:0DB9 44F400            move              #>fend,x0
+                 0000C0
+1479      P:0DBB 075B84            move              x0,p:(r3)+
+1480      P:0DBC 630900            move              r3,x:<xhead
+1481   
+1482      P:0DBD 0A02C2            jclr    #xempty,y:<flags,ekisse ; check for idling xmitter
+                 000DC0
+1483      P:0DBF 0AB02C            bset    #m_tie,x:m_scr
+1484   
+1485      P:0DC0 00FCB8  ekisse    andi    #$fc,mr
+1486      P:0DC1 00000C            rts
+1487   
+1488   
+1489                     ;****************************
+1490                     ;* Reject current KISS frame*
+1491                     ;****************************
+1492      P:0DC2 0A0246  rejc      bclr    #xkissf,y:<flags
+Motorola DSP56000 Assembler  Version 3.1  96-06-20  17:37:22  boot.asm  Page 18
+DSP CARD 4/EVM56K BIOS
+
+
+1493      P:0DC3 00000C            rts
+1494   
+1495   
+1496                     ;****************************
+1497                     ;* Get character from queue *
+1498                     ;****************************
+1499                     ; byte in x0
+1500                     ; returns  C if no data available
+1501                     ;         NC if data available
+1502      P:0DC4 0002F8  getc      ori     #$02,mr   ; disable interrupts
+1503      P:0DC5 000000            nop
+1504      P:0DC6 000000            nop
+1505      P:0DC7 000000            nop
+1506      P:0DC8 000000            nop
+1507      P:0DC9 638300            move              x:<rtail,r3
+1508   
+1509                     ; check if there are data available
+1510      P:0DCA 0B0260            btst    #rempty,y:<flags
+1511      P:0DCB 0AF0A8            jcs     getce
+                 000DD7
+1512   
+1513                     ; yes, take it from the queue
+1514      P:0DCD 0A0241            bclr    #rfull,y:<flags
+1515      P:0DCE 07DB84            move              p:(r3)+,x0
+1516      P:0DCF 630300            move              r3,x:<rtail
+1517   
+1518                     ; check if buffer gets empty
+1519      P:0DD0 568200            move              x:<rhead,a
+1520      P:0DD1 226500            move              r3,x1
+1521      P:0DD2 200065            cmp     x1,a
+1522      P:0DD3 00FEB9            andi    #$fe,ccr  ; NC
+1523      P:0DD4 0AF0A2            jne     getce
+                 000DD7
+1524   
+1525                     ; yes, set empty flag
+1526      P:0DD6 0A0260            bset    #rempty,y:<flags
+1527   
+1528      P:0DD7 00FCB8  getce     andi    #$fc,mr
+1529      P:0DD8 00000C            rts
+1530   
+1531   
+1532                     ;****************************
+1533                     ;* Test if chrs available   *
+1534                     ;****************************
+1535                     ; returns  C if no data available
+1536                     ;         NC if data available
+1537      P:0DD9 0B0260  tstc      btst    #rempty,y:<flags
+1538      P:0DDA 00000C            rts
+1539   
+1540   
+1541                     ;****************************
+1542                     ;*        Get a bit        *
+1543                     ;****************************
+1544                     ; returns next bit to be sent in C
+1545                     ; returns Z if this is an end of the transmission
+1546                     ; Note! Interrupts are disabled if end of transmission detected
+1547   
+1548                     ; check if we are allowed to send data
+1549      P:0DDB 0A02CE  getbit    jclr    #givedat,y:<flags,xstD2
+                 000E35
+1550   
+1551                     ; check if we must insert a zero
+1552      P:0DDD 0A0248            bclr    #zinsflg,y:<flags
+1553      P:0DDE 0AF0A8            jcs     getins
+                 000E03
+1554   
+1555                     ; check if there are bits left
+1556      P:0DE0 5E9200            move                          y:<xbit,a
+1557      P:0DE1 688F03            tst     a                     y:<xstate,r0
+1558      P:0DE2 05F420            move              #-1,m0
+                 FFFFFF
+1559      P:0DE4 0AE0AA            jeq     (r0)
+1560   
+1561                     ; five bit sequence detection logic
+1562      P:0DE5 0A02C7  getsft0   jclr    #ztstflg,y:<flags,getsft1 ; check if logic enabled
+Motorola DSP56000 Assembler  Version 3.1  96-06-20  17:37:22  boot.asm  Page 19
+DSP CARD 4/EVM56K BIOS
+
+
+                 000DF1
+1563      P:0DE7 5E9000            move                          y:<xdata,a
+1564      P:0DE8 200023            lsr     a
+1565      P:0DE9 5E9100            move                          y:<x5bit,a
+1566      P:0DEA 44F427            ror     a         #>$f80000,x0
+                 F80000
+1567      P:0DEC 200046            and     x0,a
+1568      P:0DED 5C1145            cmp     x0,a                  a1,y:<x5bit
+1569      P:0DEE 0AF0A2            jne     getsft1
+                 000DF1
+1570   
+1571                     ; 11111 detected, insert zero
+1572      P:0DF0 0A0268            bset    #zinsflg,y:<flags
+1573   
+1574                     ; calculate CRC
+1575      P:0DF1 5E9000  getsft1   move                          y:<xdata,a
+1576                               crc     y:<xcrcrem
+1584   
+1585                     ; shift data out (LSB first) and decrement bit counter
+1586      P:0DFC 689200            move                          y:<xbit,r0
+1587      P:0DFD 5E9000            move                          y:<xdata,a
+1588      P:0DFE 205023            lsr     a         (r0)-
+1589      P:0DFF 681200            move                          r0,y:<xbit
+1590      P:0E00 5C1000            move                          a1,y:<xdata
+1591      P:0E01 00FBB9            andi    #$fb,ccr  ; NZ
+1592      P:0E02 00000C            rts
+1593   
+1594                     ; insert zero bit
+1595      P:0E03 200013  getins    clr     a         ; reset five bit counter
+1596      P:0E04 5C1100            move                          a1,y:<x5bit
+1597      P:0E05 00FAB9            andi    #$fa,ccr  ; NC NZ
+1598      P:0E06 00000C            rts
+1599   
+1600   
+1601                     ; --- A, after a begin flag
+1602                     xstA
+1603                     ; set up data xmission
+1604                               movi    #xstB,y:<xstate
+1607                               movi    #$00ffff,y:<xcrcrem ; init CRC generator
+1610      P:0E0D 0A0267            bset    #ztstflg,y:<flags ; enable 11111 checker
+1611   
+1612                     ; --- B, after data byte sent
+1613                     xstB      movi    #8,y:<xbit ; init bit counter for the next byte
+1616      P:0E10 0D0DC4            jsr     getc      ; fetch next byte
+1617      P:0E11 4C1000            move                          x0,y:<xdata
+1618      P:0E12 208E00            move              x0,a
+1619      P:0E13 200003            tst     a
+1620      P:0E14 0E3DE5            jpl     getsft0
+1621   
+1622                     ; last databyte sent, send CRC
+1623                               movi    #xstC,y:<xstate
+1626                               movi    #16,y:<xbit
+1629      P:0E1A 5E9300            move                          y:<xcrcrem,a
+1630      P:0E1B 200017            not     a
+1631      P:0E1C 5C1000            move                          a1,y:<xdata
+1632      P:0E1D 0C0DE5            jmp     getsft0
+1633   
+1634                     ; --- C, after CRC sent
+1635                     xstC      movi    #xstD,y:<xstate
+1638                               movi    #flag,y:<xdata
+1641                               movi    #8,y:<xbit
+1644      P:0E25 0A0247            bclr    #ztstflg,y:<flags ; disable 11111 checker
+1645      P:0E26 0C0DE5            jmp     getsft0
+1646   
+1647                     ; --- D, after the last flag sent
+1648      P:0E27 0D0DD9  xstD      jsr     tstc
+1649      P:0E28 0AF0A8            jcs     xstD1
+                 000E33
+1650   
+1651                     ; new data to send, start a new frame
+1652                               movi    #xstA,y:<xstate
+1655                               movi    #flag,y:<xdata
+1658                               movi    #8,y:<xbit
+1661      P:0E31 0C0DE5            jmp     getsft0
+1662      P:0E32 00000C            rts
+Motorola DSP56000 Assembler  Version 3.1  96-06-20  17:37:22  boot.asm  Page 20
+DSP CARD 4/EVM56K BIOS
+
+
+1663   
+1664                     ; no new data, return with Z (and NC, giving a zero databit)
+1665      P:0E33 0BF080  xstD1     jsr     rdempty   ; inform xmit control module
+                 000F13
+1666      P:0E35 0004F9  xstD2     ori     #$04,ccr
+1667      P:0E36 00FEB9            andi    #$fe,ccr
+1668      P:0E37 00000C            rts
+1669   
+1670   
+1671                     ;****************************
+1672                     ;*        Put a bit        *
+1673                     ;****************************
+1674                     ; put next bit in C to the host transmit queue
+1675      P:0E38 569200  putbit    move              x:<rflag,a
+1676      P:0E39 2FFE27            ror     a         #abrtmsk,b
+1677      P:0E3A 541200            move              a1,x:<rflag
+1678      P:0E3B 218400            move              a1,x0
+1679   
+1680                     ; check if abort sequence detected
+1681      P:0E3C 26FE4E            and     x0,b      #abort,y0
+1682      P:0E3D 20005B            eor     y0,b
+1683      P:0E3E 0AF0AA            jeq     putb4
+                 000E93
+1684   
+1685                     ; check if flag detected
+1686      P:0E40 2FFF00            move              #flagmsk,b
+1687      P:0E41 267E4E            and     x0,b      #flag,y0
+1688      P:0E42 2EFE5B            eor     y0,b      #fivemsk,a
+1689      P:0E43 0AF0AA            jeq     putb3     ; yes, special handling
+                 000E73
+1690   
+1691                     ; check if 11111 sequence detected
+1692      P:0E45 267C46            and     x0,a      #five,y0
+1693      P:0E46 208F53            eor     y0,a      x0,b
+1694      P:0E47 0AF0AA            jeq     putb2     ; yes, ignore this bit
+                 000E72
+1695   
+1696                     ; no special sequence detected, shift data normally
+1697      P:0E49 0A02E9            jset    #hunt,y:<flags,putb2
+                 000E72
+1698      P:0E4B 56913B            lsl     b         x:<rdata,a
+1699      P:0E4C 45F427            ror     a         #>@pow(2,-15),x1
+                 000100
+1700      P:0E4E 541100            move              a1,x:<rdata
+1701      P:0E4F 218400            move              a1,x0
+1702   
+1703                     ; calculate CRC
+1704      P:0E50 45F4A0            mpy     x0,x1,a   #>1,x1      ; shift to right 15 bits
+                 000001
+1705                               crc     x:<rcrcrem
+1713   
+1714                     ; decrement the bit counter
+1715      P:0E5C 569300            move              x:<rbit,a
+1716      P:0E5D 2D0864            sub     x1,a      #8,b1
+1717      P:0E5E 541300            move              a1,x:<rbit
+1718      P:0E5F 0AF0A2            jne     putb2
+                 000E72
+1719   
+1720                     ; 8 bit shifted, init bit counter again
+1721      P:0E61 551300            move              b1,x:<rbit
+1722      P:0E62 0A024A            bclr    #firstb,y:<flags
+1723      P:0E63 0AF0A0            jcc     putb1
+                 000E69
+1724   
+1725                     ; first byte, init CRC checker
+1726      P:0E65 54F400            move              #$00ffff,a1
+                 00FFFF
+1727      P:0E67 541400            move              a1,x:<rcrcrem
+1728      P:0E68 00000C            rts
+1729   
+1730                     ; data bytes, put it to the queue
+1731      P:0E69 0A024B  putb1     bclr    #scndb,y:<flags
+1732      P:0E6A 0AF0A8            jcs     putb2
+                 000E72
+1733      P:0E6C 569100            move              x:<rdata,a
+Motorola DSP56000 Assembler  Version 3.1  96-06-20  17:37:22  boot.asm  Page 21
+DSP CARD 4/EVM56K BIOS
+
+
+1734      P:0E6D 44F400            move              #>$ff,x0
+                 0000FF
+1735      P:0E6F 200046            and     x0,a
+1736      P:0E70 218400            move              a1,x0
+1737      P:0E71 0D0D82            jsr     putc
+1738   
+1739                     ; discard the previous bit
+1740      P:0E72 00000C  putb2     rts
+1741   
+1742                     ; flag detected
+1743      P:0E73 0A0249  putb3     bclr    #hunt,y:<flags
+1744                               movi    #8,x:<rbit
+1747      P:0E76 0A026A            bset    #firstb,y:<flags
+1748      P:0E77 0A026B            bset    #scndb,y:<flags
+1749      P:0E78 0AF0A0            jcc     putb3a    ; reject frame if it is too short
+                 000E7C
+1750      P:0E7A 0D0DC2            jsr     rejc
+1751      P:0E7B 00000C            rts
+1752   
+1753                     ; calculate the last CRC bit
+1754      P:0E7C 449100  putb3a    move              x:<rdata,x0
+1755      P:0E7D 45F400            move              #>@pow(2,-16),x1 ; shift to right 16 bits
+                 000080
+1756      P:0E7F 2000A0            mpy     x0,x1,a
+1757                               crc     x:<rcrcrem
+1765   
+1766                     ; check that it is valid
+1767      P:0E8A 44F400            move              #>crcchk,x0
+                 00F0B8
+1768      P:0E8C 200043            eor     x0,a
+1769      P:0E8D 0AF0A2            jne     putb3b    ; reject frame if CRC failed
+                 000E91
+1770      P:0E8F 0D0DB3            jsr     endc
+1771      P:0E90 00000C            rts
+1772      P:0E91 0D0DC2  putb3b    jsr     rejc
+1773      P:0E92 00000C            rts
+1774   
+1775                     ; abort detected
+1776      P:0E93 0A0269  putb4     bset    #hunt,y:<flags
+1777      P:0E94 0D0DC2            jsr     rejc
+1778      P:0E95 00000C            rts
+1779   
+1780   
+1781                     ;****************************
+1782                     ;*       Request timer     *
+1783                     ;****************************
+1784                     ; delay in x0 (in 1/baud s)
+1785      P:0E96 5E8800  stimer    move                          y:<timcnt,a
+1786      P:0E97 44F440            add     x0,a      #>$00ffff,x0
+                 00FFFF
+1787      P:0E99 200046            and     x0,a
+1788      P:0E9A 5C0900            move                          a1,y:<timval
+1789      P:0E9B 0A0264            bset    #timer,y:<flags
+1790      P:0E9C 00000C            rts
+1791   
+1792                     ;-----------------------------------------------------------------------------
+1793                     ; The DSP CARD4 and EVM uses different hardware handshaking lines
+1794                     ; to control the CODEC and thus requires their specific initializations.
+1795   
+1796                               if      EVM56K
+1908                               else
+1909                     ;-----------------------------------------------------------------------------
+1910                     ;*****************************************
+1911                     ;*     Open codec driver  for DSP CARD4  *
+1912                     ;*****************************************
+1913                     ; Start-up Crystal CS4215 Codec
+1914                     ;   r7 - address of the modulo buffer (x: A/D, y: D/A)
+1915                     ;   m7 - lenght of the modulo buffer
+1916                     ;   x0 - samping rate and HPF enable/disable:
+1917                     ;       8      kHz   $000000
+1918                     ;       9.6    kHz   $003800
+1919                     ;      16       kHz   $000800
+1920                     ;      27.42857 kHz   $001000
+1921                     ;      32       kHz   $001800
+1922                     ;      48       kHz   $003000
+Motorola DSP56000 Assembler  Version 3.1  96-06-20  17:37:22  boot.asm  Page 22
+DSP CARD 4/EVM56K BIOS
+
+
+1923                     ;
+1924                     ;      HPF enable     $008000
+1925                     ;
+1926                     ; program SSI to handle codec's initial communication mode
+1927      P:0E9D 0002F8  opencd    ori     #$02,mr
+1928      P:0E9E 08F4AC            movep             #$4f03,x:m_cra ; 27/16 MHz SCLK, WL=16 bit, 16 W/F
+                 004F03
+1929      P:0EA0 08F4AD            movep             #$3b3c,x:m_crb ; generate SCLK and FS
+                 003B3C
+1930   
+1931      P:0EA2 08F4A1            movep             #$01e3,x:m_pcc ; TXD,RXD,SC2,SCK,SRD,STD
+                 0001E3
+1932      P:0EA4 08F4A3            movep             #$001c,x:m_pcddr ; SCLK,SC0,SC1 as output
+                 00001C
+1933      P:0EA6 08F4A5            movep             #$0000,x:m_pcd ; PDN & D/C down (wake up codec and put it to the control mode)
+                 000000
+1934   
+1935                     ; send control blocks to the codec until we get valid responce from it
+1936      P:0EA8 45F400            move              #>%1111101101000111<<8,x1 ; add sampling rate and HPF bit and set CLB = 0
+                 FB4700
+1937      P:0EAA 5C8400            move                          y:<cryconf,a1
+1938      P:0EAB 200066            and     x1,a
+1939      P:0EAC 60F442            or      x0,a      #cryconf,r0
+                 000004
+1940      P:0EAE 5C0400            move                          a1,y:<cryconf
+1941      P:0EAF 0503A0            move              #4-1,m0
+1942   
+1943      P:0EB0 0BF080  confcod   jsr     outblk    ; send control info until CLB is low
+                 000F94
+1944      P:0EB2 0A06B2            jset    #2+16,x:tmpblk+2,confcod
+                 000EB0
+1945   
+1946                     ; codec is configured, send final control block
+1947      P:0EB4 0A0472            bset    #2+16,y:<cryconf+0 ; set CLB = 1
+1948      P:0EB5 06C880            do      #200,confok ; at least two frames after CLB high
+                 000EB9
+1949      P:0EB7 0BF080            jsr     outblk    ; and ensure that at least 50 ms elapsed after leaving from PDN state
+                 000F94
+1950      P:0EB9 000000            nop
+1951      P:0EBA 05F420  confok    move              #-1,m0
+                 FFFFFF
+1952   
+1953                     ; reset and reprogram SSI again because we will get clock and frame signals from codec
+1954      P:0EBC 08F4A1            movep             #$0003,x:m_pcc ; SRD,STD
+                 000003
+1955      P:0EBE 08F4AC            movep             #$4303,x:m_cra ; WL=16 bit, 4 W/F
+                 004303
+1956      P:0EC0 08F4AD            movep             #$3b0c,x:m_crb ; receive SCLK and FS
+                 003B0C
+1957      P:0EC2 08F4A1            movep             #$01e3,x:m_pcc ; TXD,RXD,SC2,SCK,SRD,STD
+                 0001E3
+1958   
+1959                     ; then start data transfer and synchronize to it
+1960      P:0EC4 08F4A5            movep             #$0010,x:m_pcd ; D/C high (switch codec to data mode)
+                 000010
+1961   
+1962      P:0EC6 0AAE86  waitsyn   jclr    #m_tde,x:m_sr,waitsyn ; wait for the frame sync
+                 000EC6
+1963      P:0EC8 0AAEA2            jset    #m_tfs,x:m_sr,frmsync
+                 000ECD
+1964      P:0ECA 0870AF            movep             x:m_rx,x:m_tsr
+                 00FFEE
+1965      P:0ECC 0C0EC6            jmp     waitsyn
+1966   
+1967      P:0ECD 060380  frmsync   do      #4-1,flshfrm ; then get rid of the remaining data
+                 000ED2
+1968      P:0ECF 0AAE86  _loop1    jclr    #m_tde,x:m_sr,_loop1
+                 000ECF
+1969      P:0ED1 08DFEF            movep             y:(r7)+,x:m_tx
+1970      P:0ED2 0867AF            movep             x:m_rx,x:(r7)
+1971                     flshfrm
+1972   
+1973      P:0ED3 060083            do      #192*4,waitcal ; wait for calibration
+                 000ED8
+1974      P:0ED5 0AAE86  _loop2    jclr    #m_tde,x:m_sr,_loop2
+Motorola DSP56000 Assembler  Version 3.1  96-06-20  17:37:22  boot.asm  Page 23
+DSP CARD 4/EVM56K BIOS
+
+
+                 000ED5
+1975      P:0ED7 08DFEF            movep             y:(r7)+,x:m_tx
+1976      P:0ED8 0867AF            movep             x:m_rx,x:(r7)
+1977                     waitcal
+1978   
+1979      P:0ED9 08F4AD            movep             #$7b0c,x:m_crb ; enable transmit interrupts
+                 007B0C
+1980      P:0EDB 00FCB8            andi    #$fc,mr
+1981   
+1982      P:0EDC 00000C            rts
+1983   
+1984   
+1985                     ;****************************
+1986                     ;*     Close codec driver   *
+1987                     ;****************************
+1988                     ; close SSI interface and set codec to power down mode
+1989      P:0EDD 08F4A1  closecd   movep             #$0003,x:m_pcc ; TXD,RXD
+                 000003
+1990      P:0EDF 08F4A3            movep             #$001c,x:m_pcddr ; SCLK,SC0,SC1 as output
+                 00001C
+1991      P:0EE1 08F4A5            movep             #$0008,x:m_pcd ; PDN up
+                 000008
+1992   
+1993      P:0EE3 00000C            rts
+1994                     ;-----------------------------------------------------------------------------
+1995                               endif
+1996   
+1997   
+1998                     ;****************************
+1999                     ;*    Update output port    *
+2000                     ;****************************
+2001                     ; put lowest eight bits in x0 register to general purpose i/o-port
+2002      P:0EE4 0002F8  putio     ori     #$02,mr   ; disable interrupts
+2003      P:0EE5 54F400            move              #>$0000ff,a1
+                 0000FF
+2004      P:0EE7 44F446            and     x0,a      #>$ffff00,x0
+                 FFFF00
+2005      P:0EE9 218500            move              a1,x1
+2006   
+2007      P:0EEA 084E24            movep             x:m_pbd,a
+2008      P:0EEB 200046            and     x0,a
+2009      P:0EEC 200062            or      x1,a
+2010      P:0EED 08CC24            movep             a1,x:m_pbd
+2011   
+2012      P:0EEE 00FCB8            andi    #$fc,mr
+2013      P:0EEF 00000C            rts
+2014   
+2015   
+2016                     ; *** Persistence routines ***
+2017   
+2018                     ; state bits
+2019      000000         xstart    equ     0         ; starting up xmitter (xmit on, no data transmitting)
+2020      000001         xstop     equ     1         ; putting xmitter off
+2021      000002         xon       equ     2         ; xmitter currently transmitting data
+2022      000003         xoff      equ     3         ; xmitter off
+2023      000004         xwait     equ     4         ; waiting for carrier to be inactive
+2024      000005         xpersis   equ     5         ; waiting for a new persistence algorithm slot
+2025   
+2026                     ; macro for state setting
+2027                     nxstate   macro   state
+2028 m                             move    #(1<<state),a1
+2029 m                             move    a1,x:<pstate
+2030 m                             endm
+2031   
+2032                     ; kiss parameters
+2033      000001         txdelay   equ     1
+2034      000002         P         equ     2
+2035      000003         SlotTim   equ     3
+2036      000004         TXtail    equ     4
+2037      000005         FullDup   equ     5
+2038   
+2039   
+2040                     ;****************************
+2041                     ;*   Carrier off routine    *
+2042                     ;****************************
+Motorola DSP56000 Assembler  Version 3.1  96-06-20  17:37:22  boot.asm  Page 24
+DSP CARD 4/EVM56K BIOS
+
+
+2043                     ; inform Leonid that there are no data transmissions ongoing
+2044      P:0EF0 0002F8  caroff    ori     #$02,mr
+2045      P:0EF1 000000            nop
+2046      P:0EF2 000000            nop
+2047      P:0EF3 000000            nop
+2048      P:0EF4 0A024D            bclr    #carrier,y:<flags
+2049   
+2050      P:0EF5 0B15A4            jsset   #xwait,x:<pstate,dlxmit ; delayed start of xmitter if we are waiting for it
+                 000F37
+2051   
+2052      P:0EF7 00FCB8  _car1     andi    #$fc,mr
+2053      P:0EF8 00000C            rts
+2054   
+2055   
+2056                     ;****************************
+2057                     ;*   Carrier on routine     *
+2058                     ;****************************
+2059                     ; inform Leonid that there are data transmissions ongoing
+2060      P:0EF9 0002F8  caron     ori     #$02,mr
+2061      P:0EFA 000000            nop
+2062      P:0EFB 000000            nop
+2063      P:0EFC 000000            nop
+2064      P:0EFD 0A026D            bset    #carrier,y:<flags
+2065   
+2066      P:0EFE 0A1585            jclr    #xpersis,x:<pstate,_car2
+                 000F02
+2067                               nxstate xwait     ; fall back to carrier off waiting mode
+2070   
+2071      P:0F02 00FCB8  _car2     andi    #$fc,mr
+2072      P:0F03 00000C            rts
+2073   
+2074   
+2075                     ; one KISS frame received
+2076      P:0F04 0A15A3  frmrec    jset    #xoff,x:<pstate,_frm1
+                 000F09
+2077      P:0F06 0A15A1            jset    #xstop,x:<pstate,stxmiti ; curretly shutting down, but continue directly
+                 000F49
+2078      P:0F08 00000C            rts
+2079   
+2080      P:0F09 07F08E  _frm1     move              p:kisspar+FullDup-1,a ; if fullduplex mode, then there is no need to check the 
+carrier
+                 000C04
+2081      P:0F0B 200003            tst     a
+2082      P:0F0C 0AF0A2            jne     stxmit
+                 000F3E
+2083      P:0F0E 0A02CD            jclr    #carrier,y:<flags,dlxmit ; if no carrier, then start xmitter
+                 000F37
+2084   
+2085                               nxstate xwait     ; carrier, wait until it disappears
+2088      P:0F12 00000C            rts
+2089   
+2090                     ; trying to read empty buffer
+2091      P:0F13 0002F8  rdempty   ori     #$02,mr
+2092      P:0F14 000000            nop
+2093      P:0F15 000000            nop
+2094      P:0F16 000000            nop
+2095      P:0F17 0A1582            jclr    #xon,x:<pstate,_rde1
+                 000F23
+2096   
+2097                               nxstate xstop     ; stop transmitting
+2100      P:0F1B 0A024E            bclr    #givedat,y:<flags
+2101      P:0F1C 07F08E            move              p:kisspar+TXtail-1,a ; and set txdelay timer
+                 000C03
+2102      P:0F1E 5C1503            tst     a                     a1,y:<pertim
+2103      P:0F1F 0AF0A2            jne     _rde1
+                 000F23
+2104      P:0F21 0BF080            jsr     stpxmit   ; if txtail=0 stop xmitter immediately
+                 000F4D
+2105   
+2106      P:0F23 00FCB8  _rde1     andi    #$fc,mr
+2107      P:0F24 00000C            rts
+2108   
+2109                     ; persistence algorithm
+2110      P:0F25 520800  mkpersi   move              a2,x:<a2tmp ; backup a2 because this routine may be called from interrupt handl
+er
+Motorola DSP56000 Assembler  Version 3.1  96-06-20  17:37:22  boot.asm  Page 25
+DSP CARD 4/EVM56K BIOS
+
+
+2111      P:0F26 44E700            move              x:(r7),x0   ; first make a random number (combine left audio channel with timer
+)
+2112      P:0F27 45F400            move              #@pow(2,-8),x1
+                 008000
+2113      P:0F29 4C88A0            mpy     x0,x1,a               y:<timcnt,x0
+2114      P:0F2A 44F440            add     x0,a      #>$0000ff,x0
+                 0000FF
+2115      P:0F2C 200046            and     x0,a
+2116      P:0F2D 218E00            move              a1,a
+2117      P:0F2E 07F084            move              p:kisspar+P-1,x0 ; then compare it with P
+                 000C01
+2118      P:0F30 528845            cmp     x0,a      x:<a2tmp,a2
+2119      P:0F31 0AF0AF            jle     stxmit
+                 000F3E
+2120   
+2121      P:0F33 07F08C            move              p:kisspar+SlotTim-1,a1 ; we lost random number, wait slottime before trying aga
+in
+                 000C02
+2122      P:0F35 5C1500            move                          a1,y:<pertim
+2123      P:0F36 00000C            rts
+2124   
+2125                     ; wait slottime, then start xmitter
+2126      P:0F37 07F08E  dlxmit    move              p:kisspar+SlotTim-1,a ; if slottime is zero, start P-persistence algorithm imme
+diately
+                 000C02
+2127      P:0F39 5C1503            tst     a                     a1,y:<pertim
+2128      P:0F3A 0EAF25            jeq     mkpersi
+2129   
+2130                               nxstate xpersis   ; else wait first one slottime before starting P-persistence algorithm
+2133      P:0F3D 00000C            rts
+2134   
+2135                     ; start xmitter
+2136      P:0F3E 6B9400  stxmit    move                          y:<xmitsub,r3 ; call user's xmit on routine
+2137      P:0F3F 0001F9            ori     #$01,ccr
+2138      P:0F40 0BE380            jsr     (r3)
+2139   
+2140      P:0F41 07F08E            move              p:kisspar+txdelay-1,a ; and set txdelay timer
+                 000C00
+2141      P:0F43 5C1503            tst     a                     a1,y:<pertim
+2142      P:0F44 0AF0AA            jeq     stxmiti   ; if txdelay=0 then start xmitter immediately
+                 000F49
+2143                               nxstate xstart    ; change to XSTART state
+2146      P:0F48 00000C            rts
+2147   
+2148                     ; start xmitter immediately
+2149                     stxmiti   nxstate xon       ; start xmitting
+2152      P:0F4B 0A026E            bset    #givedat,y:<flags ; start giving data to the application program
+2153      P:0F4C 00000C            rts
+2154   
+2155                     ; stop xmitter immediately
+2156                     stpxmit   nxstate xoff      ; stop xmitting
+2159      P:0F4F 6B9400            move                          y:<xmitsub,r3 ; call user's xmit off
+2160      P:0F50 00FEB9            andi    #$fe,ccr
+2161      P:0F51 0BE380            jsr     (r3)
+2162      P:0F52 00000C            rts
+2163   
+2164                     ; 1/baud s timer ticks here
+2165      P:0F53 5C9500  pertick   move                          y:<pertim,a1
+2166      P:0F54 44F400            move              #>0,x0
+                 000000
+2167      P:0F56 219343            eor     x0,a      a1,r3
+2168      P:0F57 0AF0AA            jeq     _pert1
+                 000F64
+2169      P:0F59 205300            move              (r3)-       ; check if timer elapsed
+2170      P:0F5A 226C00            move              r3,a1
+2171      P:0F5B 6B1543            eor     x0,a                  r3,y:<pertim
+2172      P:0F5C 0AF0A2            jne     _pert1
+                 000F64
+2173      P:0F5E 0A15A5            jset    #xpersis,x:<pstate,mkpersi
+                 000F25
+2174      P:0F60 0A15A0            jset    #xstart,x:<pstate,stxmiti
+                 000F49
+2175      P:0F62 0A15A1            jset    #xstop,x:<pstate,stpxmit
+                 000F4D
+2176      P:0F64 00000C  _pert1    rts
+Motorola DSP56000 Assembler  Version 3.1  96-06-20  17:37:22  boot.asm  Page 26
+DSP CARD 4/EVM56K BIOS
+
+
+2177   
+2178   
+2179                     ; read one word (updating CRC)
+2180                     ; returns NC if word received, C if not
+2181      P:0F65 0BF080  rdword    jsr     rdbyte    ; MS byte
+                 000F74
+2182      P:0F67 0AF0A8            jcs     _rwe
+                 000F73
+2183      P:0F69 45F400            move              #>@cvi(@pow(2,8-1)),x1
+                 000080
+2184      P:0F6B 2000A0            mpy     x0,x1,a
+2185      P:0F6C 580300            move                          a0,y:<tmp
+2186      P:0F6D 0BF080            jsr     rdbyte    ; LS byte
+                 000F74
+2187      P:0F6F 0AF0A8            jcs     _rwe
+                 000F73
+2188      P:0F71 5E8300            move                          y:<tmp,a
+2189      P:0F72 200042            or      x0,a
+2190      P:0F73 00000C  _rwe      rts
+2191   
+2192   
+2193                     ; wait 1s for the next character and update CRC calculation
+2194                     ; returns NC if chr received, C if not
+2195      P:0F74 44F400  rdbyte    move              #>@cvi(1.0*baud),x0 ; set timer (1s)
+                 004B00
+2196      P:0F76 0D0E96            jsr     stimer
+2197      P:0F77 0BF080            jsr     waitchr
+                 000F8D
+2198      P:0F79 0AF0A8            jcs     _rbe
+                 000F8B
+2199                               crcbyte ; calculate CRC of byte in x0, result in x:<crcrem
+2214      P:0F8A 00FEB9            andi    #$fe,ccr  ; ensure that NC condition is met
+2215      P:0F8B 00000C  _rbe      rts
+2216   
+2217   
+2218                     ; wait for (predetermined time) the next character
+2219                     ; returns NC if chr received, C if not
+2220      P:0F8C 000086  wchr      wait
+2221      P:0F8D 0D0DC4  waitchr   jsr     getc      ; wait for chr of timer
+2222      P:0F8E 0AF0A0            jcc     chrfnd
+                 000F93
+2223      P:0F90 0A02E4            jset    #timer,y:<flags,wchr
+                 000F8C
+2224      P:0F92 00FEB9            andi    #$fe,ccr  ; ensure that NC condition is met
+2225      P:0F93 00000C  chrfnd    rts     ; chr found
+2226   
+2227   
+2228                     ; Output one 256 bit block (codec in the first time slot)
+2229      P:0F94 060480  outblk    do      #4,outblk1 ; actual data transfer on the first slot only
+                 000F99
+2230      P:0F96 0AAE86  _loop     jclr    #m_tde,x:m_sr,_loop
+                 000F96
+2231      P:0F98 0860AF            movep             x:m_rx,x:(r0)
+2232      P:0F99 08D8EF            movep             y:(r0)+,x:m_tx
+2233   
+2234      P:0F9A 060C80  outblk1   do      #16-4,outblk2 ; idling remainig slots
+                 000F9E
+2235      P:0F9C 0AAE86  _loop     jclr    #m_tde,x:m_sr,_loop
+                 000F9C
+2236      P:0F9E 08CC2E            movep             a1,x:m_tsr
+2237   
+2238      P:0F9F 00000C  outblk2   rts
+2239   
+2240                               if      !EVM56K
+2241                     ;-----------------------------------------------------------------------------
+2242                     ; More DSP CARD4 EEPROM loader
+2243                     ; Calculate program load address (to a1) from the address in a1
+2244                     ; returns Z if no program in a given slot
+2245      P:0FA0 0603A0  ldadr     rep     #4-1      ; first calculate directory entry address (16*id+rom)
+2246      P:0FA1 200033            lsl     a
+2247      P:0FA2 44F433            lsl     a         #>rom,x0
+                 008000
+2248      P:0FA4 200040            add     x0,a
+2249      P:0FA5 219100            move              a1,r1       ; then fetch the load address
+2250      P:0FA6 0BF080            jsr     romrdw
+Motorola DSP56000 Assembler  Version 3.1  96-06-20  17:37:22  boot.asm  Page 27
+DSP CARD 4/EVM56K BIOS
+
+
+                 000FB2
+2251      P:0FA8 00000C            rts
+2252   
+2253   
+2254                               romhdlr romrdb,romrdw,romload
+2310                     ;-----------------------------------------------------------------------------
+2311                               endif
+2312   
+2313                               if      EVM56K
+2386                               endif
+2387   
+2388                     ; serial buffers
+2389      P:1000         inbuf     dsm     buflen
+2390      P:1800         outbuf    dsm     buflen
+2391   
+2392   
+2393                     ;****************************
+2394                     ;*  CONTEX STORE FOR INTS   *
+2395                     ;****************************
+2396   
+2397      L:0000                   org     l:$0000
+2398   
+2399      L:0000         scidata   ds      2
+2400   
+2401   
+2402      X:0002                   org     x:$0002
+2403   
+2404      X:0002         rhead     ds      1
+2405      X:0003         rtail     ds      1
+2406   
+2407      X:0004         tmpblk    dsm     4
+2408      X:0008         a2tmp     ds      1
+2409   
+2410      X:0009         xhead     ds      1
+2411      X:000A         xtail     ds      1
+2412      X:000B         seqptr    ds      1
+2413      X:000C         crcrem    ds      1
+2414   
+2415      X:000D         getkst    ds      1
+2416      X:000E         rnhead    ds      1
+2417      X:000F         xnhead    ds      1
+2418      X:0010         kisscmd   ds      1
+2419   
+2420      X:0011         rdata     ds      1         ; current byte received
+2421      X:0012         rflag     ds      1         ; one bit counter
+2422      X:0013         rbit      ds      1         ; received bit counter
+2423      X:0014         rcrcrem   ds      1         ; CRC remainder
+2424   
+2425      X:0015         pstate    ds      1         ; xmit control module state
+2426   
+2427   
+2428      Y:0002                   org     y:$0002
+2429   
+2430      Y:0002         flags     ds      1
+2431      Y:0003         tmp       ds      1
+2432   
+2433                     ; Crystal CS4215 configuration data
+2434                     ; Stereo, 16-bit linear, XTAL1, 64 bit/frame, generate SCLK and FSYNC
+2435      Y:0004         cryconf   dc      %0000000000000100<<8 ; Control Time Slot 1 & 2
+2436      Y:0005                   dc      %1001001000000000<<8 ; Control Time Slot 3 & 4
+2437      Y:0006                   dc      %0000000000000000<<8 ; Control Time Slot 5 & 6
+2438      Y:0007                   dc      %0000000000000000<<8 ; Control Time Slot 7 & 8
+2439   
+2440      Y:0008         timcnt    ds      1
+2441      Y:0009         timval    ds      1
+2442      Y:000A         timchg    ds      1
+2443      Y:000B         mspace    ds      1
+2444      Y:000C         pgmptr    ds      1
+2445   
+2446      Y:000D         khead     ds      1
+2447      Y:000E         kisssub   ds      1
+2448   
+2449      Y:000F         xstate    ds      1         ; current xmitter state
+2450      Y:0010         xdata     ds      1         ; current byte to be send
+2451      Y:0011         x5bit     ds      1         ; one bit counter
+Motorola DSP56000 Assembler  Version 3.1  96-06-20  17:37:22  boot.asm  Page 28
+DSP CARD 4/EVM56K BIOS
+
+
+2452      Y:0012         xbit      ds      1         ; send bits counter
+2453      Y:0013         xcrcrem   ds      1         ; CRC remainder
+2454   
+2455      Y:0014         xmitsub   ds      1         ; xmit control module xmit routine address store
+2456      Y:0015         pertim    ds      1         ; xmit control module timer
+2457   
+2458   
+2459                               end
+
+0    Errors
+0    Warnings
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

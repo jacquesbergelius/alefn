@@ -1,0 +1,45 @@
+
+                        DSP56000 SIMULATOR
+                          Revision 1.11
+
+SIM56000.EXE is revision 1.11 of the DSP56000 simulator program.  Revision
+1.11 corrects a problem with the simulation of instructions of the type
+MOVE A,X0 #0,B that was discovered in revision 1.10 just prior to its release.
+The major changes from revision 1.0 are summarized below.
+
+The most significant change is that the simulator now simulates the DSP56001 
+as a default.  The internal bootstrap ROM and data ROM areas are predefined.  
+
+The simulator has been enhanced to fully support long registers and long 
+memory locations.  The long memory is referenced using an L: prefix.  The 
+long registers are the Data Alu registers A, B, X, and Y.  The X keycharacter 
+in the DISPLAY and BREAK commands was changed to RW to avoid ambiguity with 
+the X long register specification.
+
+Register and memory locations may now have an associated display radix.  The
+associated radix is used when displaying the contents of the register or 
+memory and during evaluation of expressions involving their contents.  The 
+RADIX command is used to specify the display radix.
+
+The DISASSEMBLE command has been enhanced so that consecutive entries of the
+command will page down through memory in 20 instruction blocks.
+
+The HELP command has been enhanced to allow help for register names.  Bit 
+field names are displayed along with the register contents for appropriate 
+control and status registers.
+
+A new command, HISTORY, has been added which displays the previous 20 
+instructions that executed prior to a breakpoint.
+
+Two major modifications were made to the INPUT and OUTPUT commands.  The
+input and output radix can now be specified, simplifying the interface with 
+other utilities that require floating point or decimal I/O.  Peripheral pin 
+bit stream input may now be tied to another device pin enabling, for example, 
+the SCI RXD pin to receive input from the SCI TXD pin without intervening 
+storage to a disk file. 
+
+The simulation execution is now based on the device PLA contents, which 
+enables excellent cycle by cycle correlation with the device operation.
+
+
+

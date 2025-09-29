@@ -1,0 +1,632 @@
+Motorola DSP56000 Assembler  Version 3.1  98-12-10  15:04:49  fsk.asm  Page 1
+
+
+
+1                                  page    132,79
+2                                  opt     rc
+4      
+5                        ;***************************************************************
+6                        ;* FSK.ASM -- Bell 202 1200 bit/s FSK modem                   *
+7                        ;*                                                       *
+8                        ;* Radio Amateur 1200 bit/s FSK modem. Demodulator is based    *
+9                        ;* on first-order complex DPLL. Symbol synchro is based on     *
+10                       ;* ML symbol synchro.                                      *
+11                       ;*                                                       *
+12                       ;* DPLL consepts are from the book:                          *
+13                       ;*      Lee, E., A., Messerschmitt, D., G.:                  *
+14                       ;*      "Digital Communication",                            *
+15                       ;*      Kluwer, 1990                                      *
+16                       ;*                                                       *
+17                       ;* Sinewave synthesis is from the application note:            *
+18                       ;*      Chrysafis, A.:                                    *
+19                       ;*      "Digital Sine-Wave Synthesis Using the DSP56001",      *
+20                       ;*      Motorola application note APR1, 1988                 *
+21                       ;*                                                       *
+22                       ;* Symbol synchro is from the article:                       *
+23                       ;*      Franks, L., E.:                                    *
+24                       ;*      "Carrier and bit Synchronization in Data               *
+25                       ;*      Communication - A Tutorial Review",                    *
+26                       ;*      IEEE Trans. on Communications,                      *
+27                       ;*      Vol. COM-28, No. 8, May 1980, p. 1107-1121            *
+28                       ;*                                                       *
+29                       ;* Copyright (C) 1994 by Alef Null. All rights reserved.       *
+30                       ;* Author(s): Jarkko Vuori, OH2LNS                           *
+31                       ;* Modification(s):                                        *
+32                       ;***************************************************************
+33     
+34        000000         kiss      set     0         ; give KISS data/debug data for SPY
+35     
+362    
+363       000100         sinep     equ     $0100     ; ROM sine table starting address
+364       000100         sinel     equ     256       ; lenght of sine table
+365       000100         buflen    equ     256
+366    
+367       002580         fs        equ     9600      ; sampling frequency
+368       0004B0         fd        equ     1200      ; decision rate
+369       000008         N         equ     fs/fd     ; samples per symbol
+370       1.200000E+003  f0        equ     1200.0    ; low FSK frequency
+371       2.200000E+003  f1        equ     2200.0    ; high FSK frequency
+372    
+373                      ; AGC
+374       7.000000E-001  refLev    equ     0.7       ; reference level for AGC
+375       000018         agcN      equ     3*N       ; agc analyse block lenght
+376       1.500000E+002  agcGain   equ     150.0     ; agc integrator gain
+377    
+378                      ; DPLL
+379       7.000000E+002  Kg        equ     700.0     ; NCO gain (in V/Hz)
+380       1.041667E-001  Kpll      equ     (Kg/fs)/refLev
+381       1.770833E-001  fc        equ     ((f0+f1)/2)/fs ; center frequency
+382    
+383                      ; Symbol synchro
+384       2.000000E-002  Ksym      equ     0.02      ; symbol synchro pll loop gain
+385    
+386                      ; DCD
+387       3.000000E-002  DCDFil    equ     0.03      ; decision error IIR LPF coefficient
+388       000078         DCDN      equ     @cvi(0.1*fd+.5) ; delay (in s) after DCD off
+389    
+390                      ; flags
+391       000000         xmit      equ     0         ; xmit on/off
+392       000001         mkdsion   equ     1         ; time to make a decision
+393       000002         car       equ     2         ; carrier on/off
+394       000003         spyflg    equ     3         ; spy on/off
+395    
+396    
+397       P:0040                   org     p:user_code
+398    
+399    
+400       P:0040 0004FA            ori     #$04,omr  ; enable on-chip sine table
+401    
+402       P:0041 67F400            move              #buffer+2,r7 ; codec sample buffer ptr
+Motorola DSP56000 Assembler  Version 3.1  98-12-10  15:04:49  fsk.asm  Page 2
+1200 bit/s FSK modem
+
+
+                 000402
+403       P:0043 05F427            move              #buflen*4-1,m7
+                 0003FF
+404    
+405       P:0045 65F400            move              #buffer+4*16+1,r5 ; sample buffer write ptr
+                 000441
+406       P:0047 3D0400            move              #4,n5
+407       P:0048 05F425            move              #buflen*4-1,m5
+                 0003FF
+408    
+409       P:004A 62F400            move              #buffer,r2  ; sample buffer read ptr
+                 000400
+410       P:004C 3A0400            move              #4,n2
+411       P:004D 05F422            move              #buflen*4-1,m2
+                 0003FF
+412    
+413       P:004F 364000            move              #<dfd,r6    ; decision filter sample ptr
+414       P:0050 3E0200            move              #2,n6
+415       P:0051 053EA6            move              #<dftaps-1,m6
+416    
+417                                if      kiss
+421                                endif
+422    
+423                      ; fs = 9600 kHz, line input, line output, no gain and attenuation
+424                                ctrlcd  1,r2,buflen,LINEI,0.0,0.0,LINEO,0.0,0.0
+445                                opencd  fs/1000.0,NOHPF
+475    
+476                      ; wait for one sample
+477                      loop      waitblk r2,buflen,1
+497    
+498                      ; first get next sample from local oscillator
+499       P:006E 449F00            move              x:<nco,x0   ; frequency in x0
+500    
+501                      ; calculate frequency increment, Finc = sinel*(K*nco + fc)
+502       P:006F 45F400            move              #Kpll,x1
+                 0D5555
+503       P:0071 56F400            move              #fc,a
+                 16AAAB
+504       P:0073 44F4A3            macr    x0,x1,a   #>sinel,x0
+                 000100
+505       P:0075 21C500            move              a,x1
+506       P:0076 2000A0            mpy     x0,x1,a
+507       P:0077 401800            move              a10,l:<frqinc1 ; frequency increment is real number
+508    
+509                      ; generate one sinewave sample (Q)
+510       P:0078 60F400            move              #sinep,r0   ; setup sine table pointers
+                 000100
+511       P:007A 61F400            move              #sinep+1,r1
+                 000101
+512       P:007C 709900            move              x:<frqptr1,n0
+513       P:007D 23191B            clr     b         n0,n1
+514       P:007E 05FFA0            move              #sinel-1,m0
+515       P:007F 0461A0            move              m0,m1
+516       P:0080 5D9900            move                          y:<frqptr1,b1 ; convert frqinc1 fraction to signed
+517       P:0081 4CE82B            lsr     b                     y:(r0+n0),x0
+518       P:0082 1FE900            move              b,x1        y:(r1+n1),b
+519    
+520       P:0083 43994C            sub     x0,b      l:<frqptr1,y ; calculate difference of adjacent sine table entries
+521       P:0084 1BE800            move              b,x0        y:(r0+n0),b
+522       P:0085 4898AB            macr    x0,x1,b   l:<frqinc1,a ; interpolate output sample
+523       P:0086 44F430            add     y,a       #>$ff,x0    ; increment table pointer
+                 0000FF
+524       P:0088 60F446            and     x0,a      #sinep+sinel/4,r0
+                 000140
+525       P:008A 481900            move              a,l:<frqptr1
+526    
+527                      ; generate one cosinewave sample (I)
+528       P:008B 61F400            move              #sinep+sinel/4+1,r1 ; setup table pointers
+                 000141
+529       P:008D 4CE800            move                          y:(r0+n0),x0
+530       P:008E 5EE900            move                          y:(r1+n1),a
+531    
+532       P:008F 200044            sub     x0,a      ; calculate difference of adjacent sine table entries
+533       P:0090 12E800            move              a,x0        y:(r0+n0),a
+534       P:0091 2000A3            macr    x0,x1,a   ; interpolate output sample
+Motorola DSP56000 Assembler  Version 3.1  98-12-10  15:04:49  fsk.asm  Page 3
+1200 bit/s FSK modem
+
+
+535    
+536                      ; output samples (I=a, Q=b)
+537       P:0092 21C500            move              a,x1
+538       P:0093 21E700            move              b,y1
+539    
+540                      ; then filter input samples and produce the I channel signal
+541       P:0094 05F420            move              #buflen*4-1,m0
+                 0003FF
+542       P:0096 70F400            move              #-4,n0
+                 FFFFFC
+543       P:0098 347F00            move              #<ifc,r4
+544    
+545       P:0099 225000            move              r2,r0
+546       P:009A 200013            clr     a
+547       P:009B F08800            move              x:(r0)+n0,x0 y:(r4)+,y0
+548       P:009C 0624A0            rep     #iftaps-1
+549       P:009D F088D2            mac     x0,y0,a   x:(r0)+n0,x0 y:(r4)+,y0
+550       P:009E 64F4D3            macr    x0,y0,a   #qfc,r4
+                 0000A4
+551    
+552                      ; AGC
+553       P:00A0 21C400            move              a,x0
+554       P:00A1 4E9E00            move                          y:<agc,y0
+555       P:00A2 2000D0            mpy     x0,y0,a
+556       P:00A3 0608A0            rep     #8
+557       P:00A4 200032            asl     a
+558    
+559                      ; then filter input samples and produce the Q channel signal
+560       P:00A5 225000            move              r2,r0
+561       P:00A6 20001B            clr     b
+562       P:00A7 F08800            move              x:(r0)+n0,x0 y:(r4)+,y0
+563       P:00A8 0624A0            rep     #iftaps-1
+564       P:00A9 F088DA            mac     x0,y0,b   x:(r0)+n0,x0 y:(r4)+,y0
+565       P:00AA 204ADB            macr    x0,y0,b   (r2)+n2
+566    
+567                      ; AGC
+568       P:00AB 21E400            move              b,x0
+569       P:00AC 4E9E00            move                          y:<agc,y0
+570       P:00AD 2000D8            mpy     x0,y0,b
+571       P:00AE 0608A0            rep     #8
+572       P:00AF 20003A            asl     b
+573    
+574                      ; output samples (I=a, Q=b)
+575       P:00B0 21C400            move              a,x0
+576       P:00B1 21E600            move              b,y0
+577    
+578                      ; calculate the phase error, Im{rx*conj(osc)}
+579       P:00B2 2000E8            mpy     y0,x1,b
+580       P:00B3 2000CF            macr    -x0,y1,b
+581       P:00B4 571F00            move              b,x:<nco    ; this is control to the local NCO
+582       P:00B5 5F7E00            move                          b,y:-(r6)   ; and also input signal for the decision filter
+583    
+584                      ; AGC control
+585       P:00B6 0A1EA0            jset    #xmit,x:<flag,_agc ; if xmit on, do not update AGC
+                 0000CF
+586       P:00B8 208E00            move              x0,a        ; find maximum
+587       P:00B9 200026            abs     a
+588       P:00BA 4CA000            move                          y:<agcmax,x0
+589       P:00BB 45F445            cmp     x0,a      #>1,x1
+                 000001
+590       P:00BD 028040            tlo     x0,a
+591       P:00BE 5E2000            move                          a,y:<agcmax
+592    
+593       P:00BF 5E9F00            move                          y:<agcn,a   ; if one block searched
+594       P:00C0 45F464            sub     x1,a      #>agcN,x1
+                 000018
+595       P:00C2 5E1F00            move                          a,y:<agcn
+596       P:00C3 0E20CF            jne     <_agc
+597    
+598       P:00C4 4D1F00            move                          x1,y:<agcn  ; calculate error and filter it
+599       P:00C5 5EA01B            clr     b                     y:<agcmax,a
+600       P:00C6 5F2000            move                          b,y:<agcmax
+601       P:00C7 57F400            move              #refLev,b
+                 59999A
+602    
+Motorola DSP56000 Assembler  Version 3.1  98-12-10  15:04:49  fsk.asm  Page 4
+1200 bit/s FSK modem
+
+
+603       P:00C9 45F41C            sub     a,b       #>@pow(2,-5)*agcGain/(fs/agcN),x1 ; rectangular integration
+                 018000
+604       P:00CB 21E400            move              b,x0
+605       P:00CC 5E9E00            move                          y:<agc,a
+606       P:00CD 2000A3            macr    x0,x1,a
+607       P:00CE 5E1E00            move                          a,y:<agc
+608                      _agc
+609    
+610                      ; Generate the output signal
+611       P:00CF 60F400            move              #sinep,r0   ; setup sine table pointers
+                 000100
+612       P:00D1 61F400            move              #sinep+1,r1
+                 000101
+613       P:00D3 709B00            move              x:<frqptr2,n0
+614       P:00D4 23191B            clr     b         n0,n1
+615       P:00D5 05FFA0            move              #sinel-1,m0
+616       P:00D6 0461A0            move              m0,m1
+617       P:00D7 5D9B00            move                          y:<frqptr2,b1 ; convert frqinc fraction to signed
+618       P:00D8 4CE82B            lsr     b                     y:(r0+n0),x0
+619       P:00D9 1FE900            move              b,x1        y:(r1+n1),b
+620    
+621       P:00DA 439B4C            sub     x0,b      l:<frqptr2,y ; calculate difference of adjacent sine table entries
+622       P:00DB 1BE800            move              b,x0        y:(r0+n0),b
+623       P:00DC 489AAB            macr    x0,x1,b   l:<frqinc2,a ; interpolate output sample
+624       P:00DD 44F430            add     y,a       #>$ff,x0    ; increment table pointer
+                 0000FF
+625       P:00DF 47F446            and     x0,a      #0.35,y1    ; output generated sample
+                 2CCCCD
+626       P:00E1 21E600            move              b,y0
+627       P:00E2 481BB1            mpyr    y0,y1,a   a,l:<frqptr2
+628       P:00E3 0A1EA0            jset    #xmit,x:<flag,_out1 ; if xmit on, then output signal
+                 0000E6
+629       P:00E5 200013            clr     a         ; else mute the output
+630       P:00E6 5E4D00  _out1     move                          a,y:(r5)+n5
+631    
+632                      ; Get next bit to be sent
+633       P:00E7 56A000            move              x:<n,a      ; check if new bit needed
+634       P:00E8 44F400            move              #>1,x0
+                 000001
+635       P:00EA 44F444            sub     x0,a      #>N,x0
+                 000008
+636       P:00EC 542000            move              a1,x:<n
+637       P:00ED 0E20F9            jne     <ss0
+638    
+639       P:00EE 442000            move              x0,x:<n     ; yes, try to fetch a new one
+640                                if      kiss
+644                                endif
+645    
+646       P:00EF 4CA337  _gb1      rol     a                     y:<prvxsym,x0 ; NRZ-S coding
+647       P:00F0 45F417            not     a         #>sinel,x1
+                 000100
+648       P:00F2 241043            eor     x0,a      #f0/fs,x0
+649       P:00F3 5C2327            ror     a                     a1,y:<prvxsym
+650    
+651       P:00F4 0E00F7            jcc     <_gb2     ; calculate output frq
+652       P:00F5 44F400            move              #f1/fs,x0
+                 1D5555
+653       P:00F7 2000A0  _gb2      mpy     x0,x1,a
+654       P:00F8 401A00            move              a10,l:<frqinc2
+655    
+656                      ; Symbol synchro
+657       P:00F9 5EE600  ss0       move                          y:(r6),a    ; comb filter to remove harmonics
+658       P:00FA 4EEE00            move                          y:(r6+n6),y0
+659       P:00FB 200050            add     y0,a
+660       P:00FC 200022            asr     a
+661       P:00FD 200026            abs     a         ; get absolute value to generate line at symbol frequence
+662       P:00FE 21C600            move              a,y0
+663    
+664       P:00FF 57A122            asr     a         x:<clocka,b ; remove DC with IIR LPF
+665       P:0100 60F42A            asr     b         #sinep,r0   ; and setup sine table pointers
+                 000100
+666       P:0102 20CE18            add     a,b       y0,a
+667       P:0103 572100            move              b,x:<clocka
+668       P:0104 61F414            sub     b,a       #sinep+1,r1
+                 000101
+Motorola DSP56000 Assembler  Version 3.1  98-12-10  15:04:49  fsk.asm  Page 5
+1200 bit/s FSK modem
+
+
+669       P:0106 562300            move              a,x:<clocke
+670    
+671       P:0107 709D00            move              x:<frqptr3,n0 ; setup nco
+672       P:0108 23191B            clr     b         n0,n1
+673       P:0109 05FFA0            move              #sinel-1,m0
+674       P:010A 0461A0            move              m0,m1
+675       P:010B 5D9D00            move                          y:<frqptr3,b1 ; convert frqinc fraction to signed
+676       P:010C 4CE82B            lsr     b                     y:(r0+n0),x0
+677       P:010D 1FE900            move              b,x1        y:(r1+n1),b
+678    
+679       P:010E 439D4C            sub     x0,b      l:<frqptr3,y ; calculate difference of adjacent sine table entries
+680       P:010F 1BE800            move              b,x0        y:(r0+n0),b
+681       P:0110 489CAB            macr    x0,x1,b   l:<frqinc3,a ; interpolate output sample
+682       P:0111 44F430            add     y,a       #>$100,x0   ; increment table pointer
+                 000100
+683       P:0113 44F445            cmp     x0,a      #>$ff,x0    ; if over 2PI then make a decision
+                 0000FF
+684       P:0115 0E8117            jlo     <ss1
+685       P:0116 0A1E21            bset    #mkdsion,x:<flag
+686       P:0117 200046  ss1       and     x0,a      ; output generated sample
+687       P:0118 481D00            move              a,l:<frqptr3
+688    
+689       P:0119 46A300            move              x:<clocke,y0 ; multiply local clock with derived signal
+690       P:011A 21E700            move              b,y1
+691       P:011B 46F4B9            mpyr    y0,y1,b   #-Ksym,y0
+                 FD70A4
+692       P:011D 21E700            move              b,y1
+693       P:011E 2610B9            mpyr    y0,y1,b   #f0/fs,y0
+694    
+695       P:011F 46F458            add     y0,b      #>sinel,y0  ; and calculate the symbol clock frq
+                 000100
+696       P:0121 21E700            move              b,y1
+697       P:0122 2000B8            mpy     y0,y1,b
+698       P:0123 411C00            move              b10,l:<frqinc3
+699    
+700                      ; Decision filter
+701       P:0124 0A1E01            bclr    #mkdsion,x:<flag ; check if time to make a decision
+702       P:0125 0E0060            jcc     <loop
+703    
+704       P:0126 302700            move              #<dfc,r0    ; yes, first filter the signal from DPLL
+705       P:0127 000000            nop
+706       P:0128 F0D813            clr     a         x:(r0)+,x0  y:(r6)+,y0
+707       P:0129 063EA0            rep     #dftaps-1
+708       P:012A F0D8D2            mac     x0,y0,a   x:(r0)+,x0  y:(r6)+,y0
+709       P:012B 2000D3            macr    x0,y0,a
+710    
+711                      ; make symbol decision (with NRZ-S decoding)
+712       P:012C 4CA400            move                          y:<prvrsym,x0
+713       P:012D 5C2443            eor     x0,a                  a1,y:<prvrsym
+714       P:012E 200017            not     a
+715       P:012F 0BCC77            btst    #23,a1
+716    
+717                      ; forward to the HDLC handler
+718                                if      kiss
+720                                endif
+721    
+722       P:0130 5EA400            move                          y:<prvrsym,a
+723       P:0131 0D0163            jsr     <spy
+724    
+725                      ; calculate decision error
+726       P:0132 5FA400            move                          y:<prvrsym,b
+727       P:0133 44F42E            abs     b         #((f1-f0)/2)/Kg,x0
+                 5B6DB7
+728       P:0135 20004C            sub     x0,b
+729       P:0136 45F42E            abs     b         #DCDFil,x1
+                 03D70A
+730    
+731                      ; filter it (with first order IIR filter)
+732       P:0138 21E400            move              b,x0
+733       P:0139 44F4A8            mpy     x0,x1,b   #(1.0-DCDFil),x0
+                 7C28F6
+734       P:013B 4DA100            move                          y:<decierr,x1
+735       P:013C 2000AB            macr    x0,x1,b
+736       P:013D 5F2100            move                          b,y:<decierr
+737    
+Motorola DSP56000 Assembler  Version 3.1  98-12-10  15:04:49  fsk.asm  Page 6
+1200 bit/s FSK modem
+
+
+738                      ; and make decision if carrier detected
+739       P:013E 0A1EA2            jset    #car,x:<flag,_caron
+                 00014B
+740       P:0140 44F400            move              #0.75/3-0.02,x0 ; check if carrier appeared
+                 1D70A4
+741       P:0142 44F44D            cmp     x0,b      #>DCDN,x0
+                 000078
+742       P:0144 0AF0A7            jgt     _car2
+                 000159
+743    
+744       P:0146 4C2200            move                          x0,y:<DCDn
+745    
+746       P:0147 0AA422            bset    #2,x:$FFE4
+747       P:0148 0A1E22            bset    #car,x:<flag
+748                                caron
+750       P:014A 0C0159            jmp     <_car2
+751    
+752       P:014B 44F400  _caron    move              #0.75/3+0.2,x0 ; check if carrier disappeared
+                 39999A
+753       P:014D 5FA24D            cmp     x0,b                  y:<DCDn,b
+754       P:014E 0AF0A9            jlt     _car2
+                 000159
+755    
+756       P:0150 44F400            move              #>1,x0      ; no carrier after DCDN symbols
+                 000001
+757       P:0152 20004C            sub     x0,b
+758       P:0153 5F2200            move                          b,y:<DCDn
+759       P:0154 0AF0A2            jne     _car2
+                 000159
+760    
+761       P:0156 0AA402            bclr    #2,x:$FFE4
+762       P:0157 0A1E02            bclr    #car,x:<flag
+763                                caroff
+765                      _car2
+766    
+767                      ; loop forever
+768       P:0159 0C0060            jmp     <loop
+769    
+770    
+771                      ; KISS parameter handling
+772       P:015A 00000C  reject    rts
+773    
+774                      ; transmitter PTT control
+775       P:015B 0AF0A0  ptt       jcc     _pttoff
+                 000160
+776       P:015D 0AA420            bset    #0,x:$FFE4
+777       P:015E 0A1E20            bset    #xmit,x:<flag
+778       P:015F 00000C            rts
+779       P:0160 0AA400  _pttoff   bclr    #0,x:$FFE4
+780       P:0161 0A1E00            bclr    #xmit,x:<flag
+781       P:0162 00000C            rts
+782    
+783    
+784                      ; *** DEBUG ***
+785                      ; special spy
+786       P:0163 0A1EA3  spy       jset    #spyflg,x:<flag,_spyon
+                 000178
+787    
+788                                lookc   0         ; check if spy operation requested
+801       P:0166 0E8191            jcs     <_spyend
+802       P:0167 56F400            move              #>'S',a
+                 000053
+803       P:0169 200045            cmp     x0,a
+804       P:016A 0E2191            jne     <_spyend
+805    
+806       P:016B 44F400            move              #>'P',x0    ; yes, send first a preamble
+                 000050
+807                                putc
+809       P:016E 240000            move              #0,x0
+810                                putc
+812       P:0170 54F400            move              #>512,a1
+                 000200
+813       P:0172 542400            move              a1,x:<spyn
+814       P:0173 54F400            move              #>1,a1
+                 000001
+Motorola DSP56000 Assembler  Version 3.1  98-12-10  15:04:49  fsk.asm  Page 7
+1200 bit/s FSK modem
+
+
+815       P:0175 542500            move              a1,x:<spym
+816       P:0176 0A1E23            bset    #spyflg,x:<flag
+817       P:0177 0C0191            jmp     <_spyend
+818    
+819                      ; spy is active, send a register to the host
+820       P:0178 57A500  _spyon    move              x:<spym,b
+821       P:0179 47F400            move              #>1,y1
+                 000001
+822       P:017B 47F47C            sub     y1,b      #>1,y1
+                 000001
+823       P:017D 572500            move              b,x:<spym
+824       P:017E 0E2191            jne     <_spyend
+825       P:017F 472500            move              y1,x:<spym
+826    
+827       P:0180 21C600            move              a,y0        ; LSB first
+828       P:0181 0608A0            rep     #8
+829       P:0182 200023            lsr     a
+830       P:0183 218400            move              a1,x0
+831                                putc
+833    
+834       P:0185 20CE00            move              y0,a        ; then HSB
+835       P:0186 0610A0            rep     #16
+836       P:0187 200023            lsr     a
+837       P:0188 218400            move              a1,x0
+838                                putc
+840    
+841       P:018A 56A400            move              x:<spyn,a   ; check if all samples allready given
+842       P:018B 44F400            move              #>1,x0
+                 000001
+843       P:018D 200044            sub     x0,a
+844       P:018E 562400            move              a,x:<spyn
+845       P:018F 0E2191            jne     <_spyend
+846       P:0190 0A1E03            bclr    #spyflg,x:<flag
+847    
+848       P:0191 00000C  _spyend   rts
+849    
+850    
+851       L:0018                   org     l:user_data
+852    
+853       L:0018         frqinc1   ds      1         ; demodulator DPLL synthesizer
+854       L:0019         frqptr1   dc      0
+855    
+856       L:001A         frqinc2   dc      256*2200.0/fs*@pow(2,-23) ; output wave synthesizer
+857       L:001B         frqptr2   dc      0
+858    
+859       L:001C         frqinc3   dc      256*1200.0/fs*@pow(2,-23) ; symbol clock synthesizer
+860       L:001D         frqptr3   dc      0
+861    
+862       L:0400         buffer    dsm     buflen*4
+863    
+864    
+865       X:001E                   org     x:user_data+6
+866    
+867       X:001E         flag      dc      0
+868    
+869       X:001F         nco       dc      0
+870    
+871       X:0020         n         dc      N
+872    
+873       X:0021         clocka    dc      0
+874       X:0022         clockb    dc      0
+875       X:0023         clocke    ds      1
+876    
+877       X:0024         spyn      ds      1
+878       X:0025         spym      ds      1
+879       X:0026         apux      ds      1
+880    
+881    
+882                      ; Decision filter
+883       X:0027         dfc       dc      -0.00041567696103898691,-0.00081890562387841972,-0.00077287490021642181,1.212762669245633
+9E-18,0.0012649095635366239
+884       X:002C                   dc      0.0022206573645156612,0.0019203394725415372,-2.4103681676650389E-18,-0.002772729208074062
+6,-0.0046459993765459286
+885       X:0031                   dc      -0.0038631268777868074,3.908467500183978E-18,0.0052444495308750288,0.008578347763639995,0
+.0069893345319871946
+Motorola DSP56000 Assembler  Version 3.1  98-12-10  15:04:49  fsk.asm  Page 8
+1200 bit/s FSK modem
+
+
+886       X:0036                   dc      -5.5625867930785253E-18,-0.009204649706698589,-0.014902880347551255,-0.012059755791003872
+,7.1756438651449731E-18
+887       X:003B                   dc      0.015845903566402978,0.02579978381752315,0.02111502337770264,-8.5315994303790973E-18,-0.0
+29056447470843367
+888       X:0040                   dc      -0.049268154359086921,-0.042777427656427156,9.4358452693819397E-18,0.073704602333730412,0
+.15797540308255884
+889       X:0045                   dc      0.22479821342437376,0.25020332089952807,0.22479821342437376,0.15797540308255884,0.0737046
+02333730412
+890       X:004A                   dc      9.4358452693819397E-18,-0.042777427656427156,-0.049268154359086921,-0.029056447470843367,
+-8.5315994303790973E-18
+891       X:004F                   dc      0.02111502337770264,0.02579978381752315,0.015845903566402978,7.1756438651449731E-18,-0.01
+2059755791003872
+892       X:0054                   dc      -0.014902880347551255,-0.009204649706698589,-5.5625867930785253E-18,0.0069893345319871946
+,0.008578347763639995
+893       X:0059                   dc      0.0052444495308750288,3.908467500183978E-18,-0.0038631268777868074,-0.0046459993765459286
+,-0.0027727292080740626
+894       X:005E                   dc      -2.4103681676650389E-18,0.0019203394725415372,0.0022206573645156612,0.0012649095635366239
+,1.2127626692456339E-18
+895       X:0063                   dc      -0.00077287490021642181,-0.00081890562387841972,-0.00041567696103898691
+896       00003F         dftaps    equ     *-dfc
+897    
+898    
+899       Y:001E                   org     y:user_data+6
+900    
+901       Y:001E         agc       dc      @pow(2,-7)
+902       Y:001F         agcn      dc      agcN
+903       Y:0020         agcmax    dc      0
+904    
+905       Y:0021         decierr   dc      0
+906       Y:0022         DCDn      dc      DCDN
+907    
+908       Y:0023         prvxsym   ds      1
+909       Y:0024         prvrsym   ds      1
+910    
+911       Y:0040         dfd       dsm     dftaps
+912    
+913                      ; Bandpass filter (I)
+914       Y:007F         ifc       dc      -2.6158392e-03,-9.0552363e-04,-7.8803034e-19,-3.3417659e-03,-3.9437887e-03
+915       Y:0084                   dc      5.8712929e-03,1.1637071e-02,2.1618050e-03,5.6086809e-03,3.1781607e-02
+916       Y:0089                   dc      2.4681104e-02,-2.6383625e-02,-3.1286527e-02,1.0386163e-02,-5.0248521e-02
+917       Y:008E                   dc      -1.9543656e-01,-1.4305906e-01,1.7572822e-01,3.7525749e-01,1.7572822e-01
+918       Y:0093                   dc      -1.4305906e-01,-1.9543656e-01,-5.0248521e-02,1.0386163e-02,-3.1286527e-02
+919       Y:0098                   dc      -2.6383625e-02,2.4681104e-02,3.1781607e-02,5.6086809e-03,2.1618050e-03
+920       Y:009D                   dc      1.1637071e-02,5.8712929e-03,-3.9437887e-03,-3.3417659e-03,-7.8803034e-19
+921       Y:00A2                   dc      -9.0552363e-04,-2.6158392e-03
+922       000025         iftaps    equ     *-ifc
+923    
+924                      ; Bandpass filter (Q)
+925       Y:00A4         qfc       dc      -0.0000000e+00,-1.5684129e-03,1.3649086e-18,4.0924827e-19,-6.8308425e-03
+926       Y:00A9                   dc      -1.0169378e-02,-2.8502602e-18,3.7443561e-03,-9.7145203e-03,4.4779103e-17
+927       Y:00AE                   dc      4.2748926e-02,4.5697779e-02,1.5325978e-17,1.7989363e-02,8.7032991e-02
+928       Y:00B3                   dc      -2.2749469e-16,-2.4778556e-01,-3.0437020e-01,1.0574477e-15,3.0437020e-01
+929       Y:00B8                   dc      2.4778556e-01,-5.2679160e-16,-8.7032991e-02,-1.7989363e-02,3.0651955e-17
+930       Y:00BD                   dc      -4.5697779e-02,-4.2748926e-02,7.7881830e-17,9.7145203e-03,-3.7443561e-03
+931       Y:00C2                   dc      2.7091879e-17,1.0169378e-02,6.8308425e-03,-7.3706064e-18,-1.3649086e-18
+932       Y:00C7                   dc      1.5684129e-03,3.8441750e-18
+933    
+934    
+935                                end
+
+0    Errors
+0    Warnings
+
+
+
+
+
+
+
+
+
+
+
+
+

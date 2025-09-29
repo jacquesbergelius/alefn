@@ -1,0 +1,145 @@
+PEROM programming utility for the DSP4
+--------------------------------------
+
+By: Rob Janssen, PE1CHL
+
+
+The DSP card 4 by Alef Null provides for the use of an ATMEL 29c256
+Programmable and Erasable Read Only Memory (PEROM) for use as bootstrap
+rom and program storage.  Instead, a standard EPROM can also be used.
+
+The PEROM has the advantage that it can be re-programmed in the circuit,
+without requiring an external programmer.  However, there was no software
+support for this yet.  Therefore I have written a small program for
+the purpose of programming the PEROM in the DSP4.
+
+
+The DSP4 monitor LEONID provides for downloadable programs.  As I had
+a relatively old version of LEONID already in a PEROM, and I do not
+have a suitable programmer for EPROM/PEROM myself, it seemed to be
+best to write the programming routine as a downloadable program.  That
+way I could update to newer versions of LEONID by reprogramming the
+PEROM, and there would be no lengthy debugging cycle for my program
+which would consist of sending my software to someone who programs it
+in a PEROM for me, and then trying it myself.
+As an added benefit, I think it is good that the programming software
+does not consume space in the DSP4 memory when the unit is in normal
+operation, and there is also no risk of accidentally invoking the
+programming routines because of software crashes etc.
+
+The operation of my programming procedure is as follows:
+
+1. the programming routine PEROM.LOD is downloaded into the DSP4 and
+   started
+
+2. a full 32K image to be programmed is downloaded into the DSP4 RAM
+   (this image can be the BTxxxxxx.BIN file as found on jeeves, or
+   an image you prepare yourself using DLIB)
+
+3. the CRC of the transferred image is checked, to make sure the download
+   was okay, and the image is valid
+
+4. the programming routine compares the contents of the transferred image
+   with the current contents of the PEROM.  For each 64-byte page where
+   the contents of the PEROM is different from the transferred image,
+   the programming procedure as specified by ATMEL for the PEROM is
+   performed
+
+5. the programmed pages are compared byte-for-byte with the RAM image.
+   the programming procedure is repeated when a mismatch occurs
+
+6. finally, the CRC of the programmed PEROM is once again checked, and the
+   whole procedure is repeated when an error has occurred
+
+
+Only programming of a full 32K image is supported.  This is because we must
+guarantee that the PEROM allways contains a valid image (correct CRC),
+or else the selfcheck feature at boot time would make the DSP4 display
+a selftest error.
+For the same reason, extensive checks are performed during the programming
+procedure, to have as little chance as possible that we end up with an
+invalid image in the PEROM.  Of course, the programming procedure must
+always be completed without interruption.  When (during the programming
+procedure) the red LED is ON, the DSP4 should not be reset or turned off!
+
+
+To program a PEROM, the following software is required:
+
+1. modified version of DL, which supports programming
+
+2. PEROM.LOD downloadable image (generated from PEROM.ASM source)
+
+When you want to upgrade LEONID using this software, please note the
+following difficulty:
+
+Each version of LEONID (at least the versions up to now) defines a different
+base address of program code and data for the downloadable programs.  These
+addresses are contained in the LEONID.ASM file, symbols 'user_code' and
+'user_data'.  Unfortunately, the code downloader has no way of checking
+the validity of the addresses of the downloaded program, and when there
+is a mismatch between the downloaded .LOD file and the LEONID resident in
+PEROM, the DSP4 will just crash instead of execute the program.
+
+PEROM.ASM sends a character over the RS232 just after starting, and the
+programming additions to DL will check this, so when the DSP4 crashes
+during the download of PEROM.LOD there will usually be an error indication
+and nothing is damaged.  However, it is certainly best to make sure that
+this mismatch does not occur.
+
+Therefore, you must make sure the PEROM.ASM file, when assembled, will
+use the LEONID.ASM include file which matches with the LEONID in the PEROM
+BEFORE THE PROGRAMMING OPERATION.
+When you have successfully upgraded the version of LEONID in your PEROM,
+you will have to re-assemble PEROM.ASM to create a new PEROM.LOD which
+can be used for subsequent programming of the PEROM.  During this re-assembly
+you will use the LEONID.ASM which corresponds with the newly programmed
+LEONID image.
+
+To create PEROM.LOD, proceed as follows:
+
+C> asm56000 -a -b -ic:\dsp4\leonid -ic:\dsp4\tools\include -l perom.asm
+                    ^^^^^^^^^^^^^^   ^^^^^^^^^^^^^^^^^^^^^
+                    directory where       directory where
+                    your LEONID.ASM       IOEQULC.ASM is
+                    is located            located
+
+The result is a PEROM.LST and PEROM.LOD file.
+
+To program the PEROM, you must CD to the directory where you have
+stored PEROM.LOD
+Then issue the command:
+
+C> dl -p2 -f bt940401.bin 
+DSP CARD 4 program downloader (Apr 10 1994)
+Downloading 'perom.lod'
+Downloading image................................
+Image was received OK
+
+Programming....................................................................
+...............................................................................
+...............................................................................
+...............................................................................
+...............................................................................
+...............................................................................
+.................................................
+Programming completed
+C> 
+
+The output of the DL program shows the progress of the programming
+operation: first 'perom.lod' is downloaded, then the specified image
+file is downloaded and validated.  Finally the PEROM is programmed.
+The dots after 'Programming' each represent a 64-byte page.  The above
+output (dots) indicates the pages in the downloaded image and the PEROM
+are already equal, i.e. the above example represents programming of an
+image which was already in the PEROM.
+When the pages are different, a + is shown instead of a dot when the
+programming was successful, a - is shown when a verify mismatch occurs.
+As long as errors occur, the programming operation is re-tried.  When this
+happens your PEROM has probably been exhausted and needs to be replaced.
+When the errors cannot be recovered, your DSP4 will no longer boot after
+this experiment.  You will need a fresh PEROM, programmed with LEONID
+on an external programmer.  (you cannot program a new PEROM in the DSP4)
+
+Good luck with PEROM programming!
+
+Rob

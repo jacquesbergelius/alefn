@@ -1,0 +1,237 @@
+
+Motorola DSP56000 Assembler  Version 3.1  95-12-27  16:50:35  qrmqrn.asm  Page 1
+
+
+
+1                                  page    132,79,1,1
+2                                  opt     rc
+4      
+5                        ;***************************************************************
+6                        ;* QRMQRN.ASM -- LMS Automatic Notch and Noise Filter          *
+7                        ;*                                                       *
+8                        ;* Provides Automatic Notch Filter (QRM reductor) and          *
+9                        ;* Noise Filter (QRN reductor) based on the LMS algorithm.     *
+10                       ;* When compiled with 0=0 noise filter code is activated.  *
+11                       ;* When compiled with 0=1 automatic 0 filter code is   *
+12                       ;* activated.                                             *
+13                       ;*                                                       *
+14                       ;* This implementation is for Alef Null DSP CARD 4 with        *
+15                       ;* Leonid monitor.                                         *
+16                       ;*                                                       *
+17                       ;* Algoriths are based on the book and article                *
+18                       ;*      Candy, J., V.:                                    *
+19                       ;*      "Signal Processing, The Modern Approach",             *
+20                       ;*      McGraw-Hill, 1988                                  *
+21                       ;*                                                       *
+22                       ;*      Reyer, S., Hershberger, D.:                         *
+23                       ;*      "Using The LMS Algorithm For QRM and QRN Reduction",   *
+24                       ;*      QEX, September 1992                                *
+25                       ;*                                                       *
+26                       ;* Copyright (C) 1993-1995 by Alef Null. All rights reserved.  *
+27                       ;* Author(s): Jarkko Vuori, OH2LNS                           *
+28                       ;* Modification(s):                                        *
+29                       ;*      improved parameters by Johan Forrer, KC7WW            *
+30                       ;***************************************************************
+31     
+32     
+268    
+269       000079         lmslen    equ     121       ; LMS filter lenght
+270       000008         buflen    equ     8         ; lenght of sample buffer
+271    
+272                                if      0
+277                                else
+278                      ; Denoiser constants
+279       000001         dlen      equ     1         ; delay line lenght
+280       5.800000E-003  beta      equ     0.0058    ; 0.1875 adaptation coefficient
+281       9.800000E-001  decay     equ     0.9800    ; coefficient decay value
+282                                endif
+283    
+284    
+285       P:0040                   org     p:user_code
+286    
+287                      ; initialize address registers
+288       P:0040 372200            move              #<buffer+2,r7 ; interrupt handler pointer
+289       P:0041 051FA7            move              #buflen*4-1,m7
+290    
+291       P:0042 368000            move              #<lmscoef,r6 ; LMS filter coeff pointer
+292    
+293       P:0043 351800            move              #<iircoef,r5 ; IIR filter coeff pointer
+294       P:0044 0503A5            move              #4-1,m5
+295    
+296       P:0045 322000            move              #<buffer,r2 ; sample buffer read pointer
+297       P:0046 3A0200            move              #4-2,n2
+298       P:0047 051FA2            move              #buflen*4-1,m2
+299    
+300       P:0048 61F400            move              #dline,r1   ; delay line sample pointer
+                 000080
+301       P:004A 0579A1            move              #dlen+lmslen-1,m1
+302    
+303                      ; initialize codec
+304                      ; fs = 16 kHz, line input, headphones and line output, no gain and attenuation
+305                                ctrlcd  1,r2,buflen,LINEI,0.0,0.0,LINEO|HEADP,0.0,0.0
+326                                opencd  16,NOHPF
+355    
+356                      ; wait for one sample
+357                      loop      waitblk r2,buflen,1
+377       P:0067 44DA00            move              x:(r2)+,x0  ; read sample from the left channel
+378    
+379                      ; highpass filter the input signal (with one biquad IIR section)
+
+
+Motorola DSP56000 Assembler  Version 3.1  95-12-27  16:50:35  qrmqrn.asm  Page 2
+LMS AutoNotcher/Denoiser
+
+
+380       P:0068 45F400            move              #0.5*g,x1   ; scale input signal
+                 0072B0
+381       P:006A 3018A0            mpy     x0,x1,a   #<iirs,r0
+382    
+383       P:006B 000BF8            ori     #$0b,mr   ; set left shift scaling mode
+384       P:006C F0B800            move              x:(r0)+,x0  y:(r5)+,y0  ; s1, a1
+385       P:006D F4A0D6            mac     -x0,y0,a  x:(r0),x1   y:(r5)+,y0  ; s2, a2
+386       P:006E F030E7            macr    -x1,y0,a  x0,x:(r0)-  y:(r5)+,y0  ; new s2, get b1
+387       P:006F F820D2            mac     x0,y0,a   a,x:(r0)    y:(r5)+,y0  ; new s1, get b2
+388       P:0070 2000E3            macr    x1,y0,a
+389       P:0071 00F4B8            andi    #$f4,mr   ; restore scaling mode
+390    
+391       P:0072 21C400            move              a,x0        ; back scaling
+392       P:0073 45F400            move              #>@cvi(1.0/g+.5),x1
+                 00008F
+393       P:0075 2000A0            mpy     x0,x1,a
+394       P:0076 200022            asr     a         ; adjust binary point
+395       P:0077 505900            move              a0,x:(r1)+
+396       P:0078 210500            move              a0,x1
+397    
+398                      ; Wiener filter convolution part
+399       P:0079 F0D913            clr     a         x:(r1)+,x0  y:(r6)+,y0
+400       P:007A 0678A0            rep     #lmslen-1
+401       P:007B F0D9D2            mac     x0,y0,a   x:(r1)+,x0  y:(r6)+,y0
+402       P:007C E0D1D3            macr    x0,y0,a   x:(r1)-,x0  y:(r6)-,y0
+403    
+404                                if      !0
+405                      ; store FIR output as a program output if denoiser code
+406       P:007D 5E5A00            move                          a,y:(r2)+   ; left channel
+407       P:007E 5E4A00            move                          a,y:(r2)+n2 ; right channel
+408                                endif
+409    
+410                      ; calculate error (e = D - Y) to x1
+411       P:007F 47F436            neg     a         #decay,y1
+                 7D70A4
+412       P:0081 44F460            add     x1,a      #beta,x0
+                 00BE0E
+413       P:0083 21C500            move              a,x1
+414    
+415                                if      0
+419                                endif
+420    
+421                      ; Wiener filter adaptation part
+422       P:0084 22D4A1            mpyr    x0,x1,a   r6,r4       ; x1 = beta * e
+423       P:0085 21C500            move              a,x1
+424    
+425       P:0086 E0D100            move              x:(r1)-,x0  y:(r6)-,y0  ; get x(0), c(0)
+426       P:0087 2000B0            mpy     y0,y1,a
+427       P:0088 E0D1A3            macr    x0,x1,a   x:(r1)-,x0  y:(r6)-,y0  ; c(0) = decay * c(0) + e * x(0)
+428       P:0089 067880            do      #lmslen-1,adaloop
+                 00008C
+429       P:008B 5E54B0            mpy     y0,y1,a               a,y:(r4)-   ; save new c
+430       P:008C E0D1A3            macr    x0,x1,a   x:(r1)-,x0  y:(r6)-,y0  ; c(n) = decay * c(n) + e * x(n)
+431                      adaloop
+432       P:008D 5E5400            move                          a,y:(r4)-   ; save c(N)
+433       P:008E F0D900            move              x:(r1)+,x0  y:(r6)+,y0
+434       P:008F F0D900            move              x:(r1)+,x0  y:(r6)+,y0
+435    
+436                      ; and do this forever
+437       P:0090 0C0059            jmp     <loop
+438    
+439    
+440       X:0018                   org     x:user_data
+441    
+442       X:0018         iirs      ds      2         ; highpass IIR states
+443    
+444       X:0020         buffer    dsm     buflen*4  ; input sample buffer
+445    
+446       X:0080         dline     dsm     dlen+lmslen ; delay line and LMS states
+447    
+448    
+449       Y:0018                   org     y:user_data
+450    
+
+
+Motorola DSP56000 Assembler  Version 3.1  95-12-27  16:50:35  qrmqrn.asm  Page 3
+LMS AutoNotcher/Denoiser
+
+
+451                      ; 0.5 dB/40 dB elliptic IIR HPF
+452                      ; pass 300 Hz, rej 35 Hz
+453       7.000000E-003  g         equ     0.007     ; biquad filter scaler
+454       Y:0018         iircoef   dc      -1.880563819/2.0,0.8990682309/2.0 ; biquad filter coeffs, a1, a2
+455       Y:001A                   dc      -1.999905221/2.0,1.0/2.0 ;                    b1, b2
+456    
+457       Y:0020                   dsm     buflen*4  ; output sample buffer
+458    
+459       Y:0080         lmscoef   dsm     lmslen    ; LMS filter coefficients
+460    
+461                                end
+
+0    Errors
+0    Warnings
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,528 @@
+Motorola DSP56000 Assembler  Version 3.1  94-04-15  00:18:06  perom.asm
+  Page 1
+
+
+
+1                        ; program the PEROM (AT29C256) onboad the DSP CARD 4
+2                        ; this program is downloaded into the DSP CARD 4 by DL,
+ when the -f option
+3                        ; is used (to program the PEROM)
+4                        ; it will receive the image, check the CRC, and then wi
+ll program the image
+5                        ; into the PEROM (skipping those pages that are already
+ equal to the image
+6                        ; sent)
+7                        ;
+8                        ; Be careful!  this program must be assembled using the
+ 'leonid' include
+9                        ; file corresponding to the version of 'leonid' present
+ in the PEROM
+10                       ; BEFORE programming.  It must be re-assembled each tim
+e a new 'leonid'
+11                       ; version has been loaded in the PEROM (when it changes
+ the org addresses)
+12                       ;
+13                       ; (c) 1994 by Rob Janssen, PE1CHL  (using some material
+ from 'leonid'
+14                       ;                                       (c) by Jarkko V
+uori, OH2LNS)
+15                       ;
+17                                 opt     rc
+434    
+435       008000         rom       equ     $8000     ; starting address of PEROM
+436       008000         romlen    equ     32768     ; lenght of the PEROM (in b
+y tes)
+437       000040         page      equ     64        ; length of one page
+438       000200         pages     equ     romlen/page ; number of pages
+439    
+440       000001         xtal      equ     27000000  ; xtal frequency
+          9BFCC0
+441    
+442       008408         poly      equ     $8408     ; HDLC CRC polynomial (x^16
+ + x^12 + x^5 + 1)
+443       00F0B8         crcchk    equ     $f0b8     ; special CRC checkword
+444    
+445                      ; byte CRC calculation routine
+446                      ; byte in x0, result in x:<crcrem
+447                      ; modifies a, b, x1, y0, y1
+448                      crcbyte   macro
+449  m                             move    x0,b1
+450  m                             move    #>$000001,x1
+451  m                             move    #>poly,y1
+452  m                             do      #8,_crc2
+453  m 
+454  m                             move    b1,a1     ; first LSB to remainder
+455  m                             and     x1,a      x:<crcrem,y0
+456  m                             eor     y0,a
+457  m 
+458  m                             lsr     a         ; XOR if needed
+459  m                             jcc     _crc1
+460  m                             eor     y1,a
+461  m                   _crc1     lsr     b         a1,x:<crcrem
+462  m                   _crc2
+463  m                             endm
+464    
+465                      ; macro for green LED handling
+466                      copled    macro   mode
+Motorola DSP56000 Assembler  Version 3.1  94-04-15  00:18:06  perom.asm
+  Page 2
+PEROM
+
+
+467  m                             b\mode  #14,x:m_pbd
+468  m                             endm
+469    
+470                      ; macro for red LED handling
+471                      cmdled    macro   mode
+472  m                             b\mode  #13,x:m_pbd
+473  m                             endm
+474    
+475       P:0040                   org     p:user_code
+476    
+477                      ; macro for immediate move
+478                      movi      macro   data,dest
+479  m                             move    data,a1
+480  m                             move    a1,dest
+481  m                             endm
+482    
+483    
+484                      ; entry point: acknowledge startup and prepare for imag
+e transfer
+485       P:0040 000000  entry     nop     ; attempt to make entry point
+486       P:0041 000000            nop     ;   less critical (leonid
+487       P:0042 000000            nop     ;   versions have different
+488       P:0043 000000            nop     ;   user code org addresses)
+489       P:0044 000000            nop
+490       P:0045 44F400            move              #>$47,x0    ; send G
+                 000047
+491                                putc
+493    
+494                                movi    #$00ffff,x:<crcrem ; prepare for CRC 
+check
+497       P:004B 64F400            move              #buffer,r4  ; r4 = buffer p
+ointer
+                 000030
+498       P:004D 350000            move              #0,r5       ; r5 = word pac
+king ptr
+499       P:004E 44F400            move              #romlen,x0
+                 008000
+500       P:0050 06C400            do      x0,receive
+                 00007A
+501                                getc    ; get one byte from RS232
+505                                crcbyte ; calculate CRC of byte in x0, result
+ in x:<crcrem
+520       P:0064 56F400            move              #>1,a       ; see where it 
+goes
+                 000001
+521       P:0066 22A500            move              r5,x1
+522       P:0067 205D65            cmp     x1,a      (r5)+
+523       P:0068 0E9076            jlt     <byte3
+524       P:0069 0EA06F            jeq     <byte2
+525       P:006A 45F400            move              #>@cvi(@pow(2,16-1)),x1 ; m
+ove to upper byte
+                 008000
+526       P:006C 2000A0            mpy     x0,x1,a
+527       P:006D 586400            move                          a0,y:(r4)   ; w
+rite xx0000 to memory
+528       P:006E 0C007A            jmp     <next
+529    
+530       P:006F 45F400  byte2     move              #>@cvi(@pow(2,8-1)),x1 ; mo
+ve to middle byte
+                 000080
+531       P:0071 4FE4A0            mpy     x0,x1,a               y:(r4),y1
+Motorola DSP56000 Assembler  Version 3.1  94-04-15  00:18:06  perom.asm
+  Page 3
+PEROM
+
+
+532       P:0072 210C00            move              a0,a1       ; combine with 
+upper byte
+533       P:0073 200072            or      y1,a
+534       P:0074 5C6400            move                          a1,y:(r4)   ; m
+ove xxyy00 to memory
+535       P:0075 0C007A            jmp     <next
+536    
+537       P:0076 5CE400  byte3     move                          y:(r4),a1
+538       P:0077 200042            or      x0,a
+539       P:0078 5C5C00            move                          a1,y:(r4)+  ; m
+ove xxyyzz to memory
+540       P:0079 350000            move              #0,r5       ; next triple
+541       P:007A 000000  next      nop
+542       P:007B 44F400  receive   move              #>crcchk,x0 ; check CRC
+                 00F0B8
+543       P:007D 56B000            move              x:<crcrem,a
+544       P:007E 200045            cmp     x0,a
+545       P:007F 0EA085            jeq     <xferok
+546    
+547                      ; CRC error in transferred ROM image
+548       P:0080 44F400            move              #>$45,x0    ; send E
+                 000045
+549                                putc
+551    
+552                      ; just sit idle until RESET
+553       P:0083 000086  loop      wait
+554       P:0084 0C0083            jmp     loop
+555    
+556                      ; Transfer was ok, double check from RAM to know for su
+re the image is OK
+557                      xferok    movi    #$00ffff,x:<crcrem ; prepare for CRC 
+check
+560       P:0088 64F400            move              #buffer,r4  ; r4 = buffer p
+ointer
+                 000030
+561       P:008A 350000            move              #0,r5       ; r5 = word pac
+king ptr
+562       P:008B 44F400            move              #romlen,x0
+                 008000
+563       P:008D 06C400            do      x0,check
+                 00009F
+564       P:008F 0D0156            jsr     <getbyte
+565                                crcbyte
+580       P:009F 000000            nop
+581       P:00A0 44F400  check     move              #>crcchk,x0 ; check CRC
+                 00F0B8
+582       P:00A2 56B000            move              x:<crcrem,a
+583       P:00A3 200045            cmp     x0,a
+584       P:00A4 0EA0A9            jeq     <ramok
+585    
+586                      ; CRC was ok in transfer, bad in RAM -> RAM FAULT
+587       P:00A5 44F400            move              #>$46,x0    ; send F
+                 000046
+588                                putc
+590    
+591       P:00A8 0C0083            jmp     loop
+592    
+593                      ; CRC ok in RAM as well
+594                      ramok
+595       P:00A9 44F400  again     move              #>$59,x0    ; send Y
+                 000059
+Motorola DSP56000 Assembler  Version 3.1  94-04-15  00:18:06  perom.asm
+  Page 4
+PEROM
+
+
+596                                putc
+598    
+599                                cmdled  set
+601                                movi    #0,x:errors
+604    
+605                      ; now compare buffered data with PEROM, and program pag
+es that differ
+606       P:00B0 61F400            move              #rom,r1     ; r1 = PEROM po
+inter
+                 008000
+607       P:00B2 64F400            move              #buffer,r4  ; r4 = buffer p
+ointer
+                 000030
+608       P:00B4 350000            move              #0,r5       ; r5 = word pac
+king ptr
+609       P:00B5 060082            do      #pages,dopages
+                 00011D
+610       P:00B7 200013            clr     a
+611       P:00B8 617000            move              r1,x:r1save ; save regs @ p
+age start
+                 000032
+612       P:00BA 647000            move              r4,x:r4save
+                 000033
+613       P:00BC 657000            move              r5,x:r5save
+                 000034
+614       P:00BE 064080            do      #page,dopage
+                 0000C6
+615       P:00C0 0D0156            jsr     <getbyte
+616       P:00C1 208C00            move              x0,a1
+617       P:00C2 0D0147            jsr     <rdromb
+618       P:00C3 200043            eor     x0,a      ; RAM ^ ROM to a1
+619       P:00C4 210400            move              a0,x0
+620       P:00C5 200042            or      x0,a      ; keep accumulated xor
+621       P:00C6 218800            move              a1,a0
+622       P:00C7 210413  dopage    clr     a         a0,x0
+623       P:00C8 200045            cmp     x0,a
+624       P:00C9 0EA11A            jeq     <eqpage   ; pages equal, skip
+625    
+626                      ; a page with differing data has been found, program it
+627       P:00CA 61F400            move              #rom+$5555,r1 ; enable prog
+ramming
+                 00D555
+628       P:00CC 44F400            move              #>$aa,x0
+                 0000AA
+629       P:00CE 0D0150            jsr     <wrromb
+630       P:00CF 61F400            move              #rom+$2aaa,r1
+                 00AAAA
+631       P:00D1 44F400            move              #>$55,x0
+                 000055
+632       P:00D3 0D0150            jsr     <wrromb
+633       P:00D4 61F400            move              #rom+$5555,r1
+                 00D555
+634       P:00D6 44F400            move              #>$a0,x0
+                 0000A0
+635       P:00D8 0D0150            jsr     <wrromb
+636       P:00D9 61F000            move              x:r1save,r1 ; back to page 
+start
+                 000032
+637       P:00DB 64F000            move              x:r4save,r4
+                 000033
+638       P:00DD 65F000            move              x:r5save,r5
+Motorola DSP56000 Assembler  Version 3.1  94-04-15  00:18:06  perom.asm
+  Page 5
+PEROM
+
+
+                 000034
+639       P:00DF 064080            do      #page,prpage
+                 0000E3
+640       P:00E1 0D0156            jsr     <getbyte
+641       P:00E2 0D0150            jsr     <wrromb   ; load page data
+642       P:00E3 000000            nop
+643       P:00E4 208500  prpage    move              x0,x1       ; save last byt
+e
+644    
+645                      ; wait for the programming cycle to complete
+646       P:00E5 60F400            move              #>100,r0    ; max milliseco
+nds to wait
+                 000064
+647    
+648       P:00E7 069380  waitp     do      #@cvi(@sqt(xtal/2.0/1000.0)),del2 ; d
+elay 1/1000s (1ms)
+                 0000EC
+649       P:00E9 069380            do      #@cvi(@sqt(xtal/2.0/1000.0)),del1
+                 0000EB
+650       P:00EB 000000            nop
+651       P:00EC 000000  del1      nop
+652                      del2
+653       P:00ED 205100            move              (r1)-       ; back to last 
+address
+654       P:00EE 0D0147            jsr     <rdromb
+655       P:00EF 208E00            move              x0,a        ; verify D7
+656       P:00F0 44F463            eor     x1,a      #>$80,x0
+                 000080
+657       P:00F2 200046            and     x0,a
+658       P:00F3 0AF0AA            jeq     prcompl   ; D7 okay, is complete
+                 0000FA
+659    
+660       P:00F5 205000            move              (r0)-       ; count attempt
+s
+661       P:00F6 200013            clr     a
+662       P:00F7 220400            move              r0,x0
+663       P:00F8 200045            cmp     x0,a
+664       P:00F9 0E20E7            jne     waitp     ; check completion again
+665    
+666                      ; verify the programmed page
+667       P:00FA 200013  prcompl   clr     a
+668       P:00FB 61F000            move              x:r1save,r1 ; back to page 
+start
+                 000032
+669       P:00FD 64F000            move              x:r4save,r4
+                 000033
+670       P:00FF 65F000            move              x:r5save,r5
+                 000034
+671       P:0101 064080            do      #page,ckpage
+                 000109
+672       P:0103 0D0156            jsr     <getbyte
+673       P:0104 208C00            move              x0,a1
+674       P:0105 0D0147            jsr     <rdromb
+675       P:0106 200043            eor     x0,a      ; RAM ^ ROM to a1
+676       P:0107 210400            move              a0,x0
+677       P:0108 200042            or      x0,a      ; keep accumulated xor
+678       P:0109 218800            move              a1,a0
+679       P:010A 210413  ckpage    clr     a         a0,x0
+680       P:010B 200045            cmp     x0,a
+681       P:010C 0EA117            jeq     <okpage   ; pages equal, ok
+682    
+Motorola DSP56000 Assembler  Version 3.1  94-04-15  00:18:06  perom.asm
+  Page 6
+PEROM
+
+
+683       P:010D 56F000            move              x:errors,a  ; count errors
+                 000031
+684       P:010F 44F400            move              #>1,x0
+                 000001
+685       P:0111 200040            add     x0,a
+686       P:0112 547000            move              a1,x:errors
+                 000031
+687    
+688       P:0114 44F400            move              #>$2d,x0    ; error, send a
+ -
+                 00002D
+689       P:0116 0C011C            jmp     <epage
+690    
+691                      ; page programmed OK
+692       P:0117 44F400  okpage    move              #>$2b,x0    ; send a +
+                 00002B
+693       P:0119 0C011C            jmp     <epage
+694    
+695       P:011A 44F400  eqpage    move              #>$2e,x0    ; send a dot
+                 00002E
+696                      epage     putc
+698       P:011D 000000            nop
+699       P:011E 000000  dopages   nop
+700                                cmdled  clr
+702    
+703                      ; check if errors remain
+704       P:0120 44F013            clr     a         x:errors,x0
+                 000031
+705       P:0122 200045            cmp     x0,a
+706       P:0123 0E20A9            jne     again     ; errors, go again
+707    
+708                      ; finally verify the CRC of the programmed PEROM
+709                      ; (paranoid, aren't we?)
+710       P:0124 61F400            move              #rom,r1
+                 008000
+711                                movi    #$00ffff,x:<crcrem
+714       P:0129 44F400            move              #romlen,x0
+                 008000
+715       P:012B 06C400            do      x0,check1
+                 00013D
+716       P:012D 0D0147            jsr     <rdromb
+717                                crcbyte
+732       P:013D 000000            nop
+733       P:013E 44F400  check1    move              #>crcchk,x0 ; check with sp
+ecial checkword
+                 00F0B8
+734       P:0140 56B000            move              x:<crcrem,a
+735       P:0141 200045            cmp     x0,a
+736       P:0142 0E20A9            jne     again     ; not ok, program again
+737    
+738       P:0143 44F400            move              #>$51,x0    ; done, send Q
+                 000051
+739                                putc
+741       P:0146 0C0083            jmp     loop
+742    
+743    
+744    
+745    
+746                      ; read one byte from the boot ROM (@r1) to x0
+747                      ; modifies b, updates r1
+748       P:0147 08F4BE  rdromb    movep             #$00f0,x:m_bcr ; slow PEROM
+Motorola DSP56000 Assembler  Version 3.1  94-04-15  00:18:06  perom.asm
+  Page 7
+PEROM
+
+
+ on P bank
+                 0000F0
+749       P:0149 07D984            move              p:(r1)+,x0
+750       P:014A 2DFF00            move              #$0000ff,b1 ; mask unused d
+atabits off
+751       P:014B 20004E            and     x0,b
+752       P:014C 21A400            move              b1,x0
+753       P:014D 08F4BE            movep             #$0000,x:m_bcr ; no more sl
+ow PEROM reads
+                 000000
+754       P:014F 00000C            rts
+755    
+756                      ; write one byte to the PEROM (@r1) from x0
+757                      ; modifies b, updates r1
+758       P:0150 08F4BE  wrromb    movep             #$00f0,x:m_bcr ; slow PEROM
+ on P bank
+                 0000F0
+759       P:0152 075984            move              x0,p:(r1)+
+760       P:0153 08F4BE            movep             #$0000,x:m_bcr ; no more sl
+ow PEROM
+                 000000
+761       P:0155 00000C            rts
+762    
+763                      ; get a byte from the buffer (@r4, byte r5)
+764                      ; modifies b, updates r4/r5
+765       P:0156 57F400  getbyte   move              #>1,b       ; from where?
+                 000001
+766       P:0158 22A400            move              r5,x0
+767       P:0159 205D4D            cmp     x0,b      (r5)+
+768       P:015A 5FE400            move                          y:(r4),b    ; g
+et word
+769       P:015B 44F400            move              #>$0000ff,x0 ; prepare for 
+later masking
+                 0000FF
+770       P:015D 0E9169            jlt     <gbyte3
+771       P:015E 0EA164            jeq     <gbyte2
+772       P:015F 0610A0            rep     #16       ; take upper byte
+773       P:0160 20002B            lsr     b
+774       P:0161 20004E            and     x0,b
+775       P:0162 21A400            move              b1,x0
+776       P:0163 00000C            rts
+777    
+778       P:0164 0608A0  gbyte2    rep     #8        ; take middle byte
+779       P:0165 20002B            lsr     b
+780       P:0166 20004E            and     x0,b
+781       P:0167 21A400            move              b1,x0
+782       P:0168 00000C            rts
+783    
+784       P:0169 205C4E  gbyte3    and     x0,b      (r4)+       ; take lower by
+te, next
+785       P:016A 21A400            move              b1,x0
+786       P:016B 350000            move              #0,r5
+787       P:016C 00000C            rts
+788    
+789    
+790    
+791                      ; variables
+792    
+793       X:0018                   org     x:user_data
+794    
+795       X:0020                   dsm     16
+Motorola DSP56000 Assembler  Version 3.1  94-04-15  00:18:06  perom.asm
+  Page 8
+PEROM
+
+
+796       X:0030         crcrem    ds      1
+797       X:0031         errors    ds      1
+798       X:0032         r1save    ds      1
+799       X:0033         r4save    ds      1
+800       X:0034         r5save    ds      1
+801    
+802       X:0035                   ds      1
+803    
+804       Y:0018                   org     y:user_data
+805    
+806       Y:0020                   dsm     16
+807       Y:0030         buffer    ds      romlen/3+1 ; holds the image
+808    
+809       Y:2ADB                   ds      1
+810    
+811                                end
+
+0    Errors
+0    Warnings
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

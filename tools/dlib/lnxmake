@@ -1,0 +1,26 @@
+# makefile for compilation of DSP4 utilities under Linux (GCC)
+
+all:	dlib dl
+
+# have to use the C++ compiler because there are C++ style comments in
+# the sources...  get rid of cdecl and huge keywords as well.
+.c.o:
+	g++ -c -O2 -Wall -Dcdecl= -Dhuge= $<
+
+dl:	dl.o dlcmd.o utils.o lserial.o
+	g++ -s -N dl.o dlcmd.o utils.o lserial.o -o $@
+
+dlib:	dlib.o dlibcmd.o utils.o
+	g++ -s -N dlib.o dlibcmd.o utils.o -o $@
+
+dl.o:	utils.h dl.h
+
+dlcmd.o: utils.h dl.h
+
+dlib.o:	utils.h dlib.h
+
+dlibcmd.o: utils.h dlib.h
+
+lserial.o: utils.h dl.h
+
+utils.o: utils.h

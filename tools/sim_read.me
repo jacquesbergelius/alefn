@@ -1,0 +1,83 @@
+   
+     Your SIM56000 program provides the capability to simulate all functions
+   of Motorola's DSP56000 digital signal processor - including simulation of
+   all on-chip peripheral operations and all on and off-chip memory areas.
+   Although your version number reads 1.0, this software has been extensively
+   tested and revised by the DSP56000 design team.
+
+     The following notes should be added to the SIM56000 Reference Manual:
+
+     The simulator software is provided on a write-protected floppy 
+   disk.  Since several of the simulator commands create temporary disk
+   files,  you should not attempt to execute programs directly from the
+   master disk.  Copy the simulator to a non-protected floppy or to 
+   your hard disk and store the master disk in a safe place.  If you
+   must execute from the floppy disk,  you should consider using the
+   simulator PATH command to specify a different disk for the temporary
+   files.
+
+     The SYSTEM command can execute any command in your current path as 
+   a child process.  When you specify the SYSTEM command without a following
+   command name, the system "command.com" file is executed as the default.
+   One limiting factor pertaining to the execution of the SYS command is 
+   that the simulator program stays resident in memory while an attempt is
+   made to execute the child process.  During simulation of any moderate 
+   or large programs, the simulator will normally grab all available
+   memory in the PC for simulation of the DSP56000 memory spaces.  The
+   child process will not have enough memory to execute in this case.
+   As an optional solution, use the SAVE S command to save the simulator
+   state.  Exit the simulator with the QUIT command.  Return to the
+   simulator at any time and reload the previously saved state with
+   the LOAD S command.  Note also that the simulator SYSTEM command
+   will automatically save the simulator state in SIM56000.SIM as the
+   first step in the SYSTEM command execution.  You may reload this file
+   just as any other state file with the LOAD S command.
+
+     Several simulator commands will create temporary files as a side effect.
+   The SYSTEM command will create SIM56000.SIM as just described.  The
+   INPUT command will create files TERMnnnn.IO (untimed) or TERMnnnn.TIO 
+   (timed mode) if input is specified from the terminal.  The nnnn field
+   is a 4 digit decimal number.  Simulation of the DSP56000 memory spaces
+   will create the temporary file SMPXY.MEM if no more memory is available
+   in the PC.  No user query is generated prior to deletion if SMPXY.MEM 
+   or SIM56000.SIM already exist in the simulator working directory, so be
+   careful that you don't intend to keep previous files with these names.
+
+     The simulator BREAK command checks the break condition at the end
+   of each instruction.  The only exception to this is when the CYC register
+   is specified in the break command expression.  Since the PC register
+   will change twice during a two word instruction,  a break instruction of
+   the form BREAK PC=1000 will fail to break if location 1000 is in the
+   middle of a two word instruction.  Furthermore, the PC value and the
+   execution fetch address are not always the same since the PC value does
+   not change during the fast interrupt processing fetches.  The best
+   way to solve both of these problems is to use a command of the form
+   BREAK R P:1000 rather than the PC register expression.  All memory
+   locations that are referenced during an instruction are available to
+   the BREAK command at the end of the instruction, so this break condition
+   will always succeed.
+
+     The BREAK command allows arbitrarily complex breakpoint expressions.
+   Long complex expressions do carry some execution time overhead, however.
+   Short expressions of the form BREAK LC=10 or BREAK R0>=30 are "compiled"
+   by the simulator and will execute much faster than the longer expressions
+   which are reinterpretted by the evaluator each instruction cycle.  The
+   expressions of the form BREAK R P:5 or BREAK W X0 are also relatively
+   fast breakpoint expressions.
+
+     If you are executing code from the DSP56000  external memory space,  
+   the DSP56000 bus control register (BCR)  causes a programmed number of 
+   wait states for each memory fetch.  This feature of the DSP56000 allows
+   accesses of slow external memories with no external glue hardware. Since 
+   all peripheral activity and file I/O activity is updated each cycle, the 
+   wait states result in a noticeable increase in execution time. You will 
+   probably want to use the command CHANGE BCR 0, i.e., no wait states, 
+   prior to  executing code unless you need the cycle count values that 
+   result from programmed wait states.
+
+
+     
+
+
+
+   

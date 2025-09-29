@@ -1,0 +1,30 @@
+		Alef Null DSP CARD 4 Programmers Tools
+		 by Jarkko Vuori, Jarkko.Vuori@hut.fi
+
+This archive contains all Alef Null DSP CARD 4 Programmers Software
+Tools currently available for DSP CARD 4.
+
+Motorola Compiler (ASM56000.EXE), Motorola Linker (LNK56000.EXE) and
+Motorola Simulator (SIM56000.EXE) are old versions that are placed
+in public domain (they are available from nic.funet.fi, for example). Newer
+versions are available from Motorola.
+
+Other programs are DSP CARD 4 ROM library handler (DLIB.EXE) and
+program downloader (DL.EXE) and they are intended for private use only.
+You may redistribute far and wide but charge no money, not even handling fees.
+
+Commercial use of this code is absolutely prohibited without permission of
+the author. This code may not be used as the basis of any program that will
+be sold, bartered, or in any way traded for gain without the permission of
+the author.
+
+There is no warranty. What you see is what you get.
+
+
+EQUIPMENT REQUIREMENTS
+
+Executables are for IBM PC/AT series computers and DSP CARD 4 digital
+signal processing card.
+
+
+OTHER INFO
